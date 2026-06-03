@@ -1,0 +1,31 @@
+digraph "" {
+	graph [bb="0,0,394.5,60.5",
+		label="PyGraphviz Test",
+		labelloc=t,
+		lheight=0.23,
+		lp="197.25,48.25",
+		lwidth=1.25,
+		rankdir=LR
+	];
+	node [fillcolor="#eef6ff",
+		label="\N",
+		shape=box,
+		style="rounded,filled"
+	];
+	edge [color="#4a6fa5"];
+	Install	[height=0.5,
+		pos="27,18",
+		width=0.75];
+	"Import OK"	[height=0.5,
+		pos="128.38,18",
+		width=1.066];
+	Install -> "Import OK"	[pos="e,89.657,18 54.37,18 61.717,18 69.945,18 78.155,18"];
+	"Layout OK"	[height=0.5,
+		pos="241.5,18",
+		width=1.0764];
+	"Import OK" -> "Layout OK"	[pos="e,202.54,18 167,18 174.79,18 183.1,18 191.24,18"];
+	"Render OK"	[height=0.5,
+		pos="355.38,18",
+		width=1.0868];
+	"Layout OK" -> "Render OK"	[pos="e,315.98,18 280.69,18 288.34,18 296.49,18 304.48,18"];
+}

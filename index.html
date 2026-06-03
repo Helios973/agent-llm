@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>AuditPilot - Code Audit Agent</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 240px 1fr 340px;
+      height: 100vh;
+    }
+
+    .sidebar {
+      background: #020617;
+      padding: 24px;
+      border-right: 1px solid #1e293b;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 36px;
+      color: #38bdf8;
+    }
+
+    .nav-item {
+      padding: 14px;
+      margin-bottom: 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      color: #94a3b8;
+    }
+
+    .nav-item.active,
+    .nav-item:hover {
+      background: #1e293b;
+      color: white;
+    }
+
+    .main {
+      padding: 32px;
+      overflow-y: auto;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 30px;
+    }
+
+    .header p {
+      color: #94a3b8;
+    }
+
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 18px;
+      padding: 24px;
+      margin-top: 24px;
+    }
+
+    .upload-box {
+      border: 2px dashed #334155;
+      border-radius: 16px;
+      padding: 50px;
+      text-align: center;
+      background: #020617;
+    }
+
+    .upload-box:hover {
+      border-color: #38bdf8;
+    }
+
+    .upload-box input {
+      display: none;
+    }
+
+    .btn {
+      margin-top: 20px;
+      padding: 12px 22px;
+      border: none;
+      border-radius: 10px;
+      background: #38bdf8;
+      color: #020617;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .btn.secondary {
+      background: #1e293b;
+      color: white;
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px;
+    }
+
+    .config-item label {
+      display: block;
+      margin-bottom: 8px;
+      color: #94a3b8;
+    }
+
+    select, input[type="text"] {
+      width: 100%;
+      padding: 12px;
+      background: #020617;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      color: white;
+    }
+
+    .right-panel {
+      background: #020617;
+      padding: 24px;
+      border-left: 1px solid #1e293b;
+    }
+
+    .agent-box {
+      background: #111827;
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 18px;
+      border: 1px solid #1f2937;
+    }
+
+    .risk {
+      display: flex;
+      justify-content: space-between;
+      margin: 10px 0;
+    }
+
+    .high { color: #f87171; }
+    .medium { color: #facc15; }
+    .low { color: #4ade80; }
+
+    .log {
+      font-size: 14px;
+      color: #94a3b8;
+      line-height: 1.7;
+    }
+
+    .status {
+      color: #4ade80;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">AuditPilot</div>
+      <div class="nav-item active">代码审计</div>
+      <div class="nav-item">容器上传</div>
+      <div class="nav-item">审计报告</div>
+      <div class="nav-item">历史任务</div>
+      <div class="nav-item">设置</div>
+    </aside>
+
+    <main class="main">
+      <div class="header">
+        <h1>代码审计 Agent</h1>
+        <p>上传项目文件到容器，自动分析漏洞、危险函数、依赖风险和敏感信息。</p>
+      </div>
+
+      <section class="card">
+        <h2>上传代码文件</h2>
+        <div class="upload-box">
+          <p>拖拽项目压缩包 / 源码文件到这里</p>
+          <p>支持 .zip / .tar.gz / .py / .js / .php / .java / .go</p>
+          <label>
+            <button class="btn secondary">选择文件</button>
+            <input type="file" multiple />
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>容器配置</h2>
+        <div class="config-grid">
+          <div class="config-item">
+            <label>运行环境</label>
+            <select>
+              <option>Python / Node / PHP 自动识别</option>
+              <option>Python 3.11</option>
+              <option>Node.js 20</option>
+              <option>PHP 8.2</option>
+              <option>Go 1.22</option>
+            </select>
+          </div>
+
+          <div class="config-item">
+            <label>审计模式</label>
+            <select>
+              <option>标准审计</option>
+              <option>深度审计</option>
+              <option>CTF / Pwn 辅助分析</option>
+              <option>Web 漏洞审计</option>
+            </select>
+          </div>
+
+          <div class="config-item">
+            <label>项目路径</label>
+            <input type="text" placeholder="/workspace/project" />
+          </div>
+
+          <div class="config-item">
+            <label>报告格式</label>
+            <select>
+              <option>Markdown</option>
+              <option>HTML</option>
+              <option>PDF</option>
+              <option>JSON</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="btn">启动代码审计</button>
+      </section>
+    </main>
+
+    <aside class="right-panel">
+      <div class="agent-box">
+        <h3>Agent 状态</h3>
+        <p>容器状态：<span class="status">Ready</span></p>
+        <p>当前任务：等待上传</p>
+      </div>
+
+      <div class="agent-box">
+        <h3>风险统计</h3>
+        <div class="risk"><span>高危漏洞</span><span class="high">0</span></div>
+        <div class="risk"><span>中危漏洞</span><span class="medium">0</span></div>
+        <div class="risk"><span>低危风险</span><span class="low">0</span></div>
+      </div>
+
+      <div class="agent-box">
+        <h3>Agent 日志</h3>
+        <div class="log">
+          [Agent] 等待文件上传...<br>
+          [Container] 沙箱环境已初始化<br>
+          [Audit] 规则引擎加载完成<br>
+        </div>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>
