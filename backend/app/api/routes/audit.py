@@ -4,20 +4,30 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import AuditTask
+from backend.app.models import AuditTask, User
 from backend.app.schemas.audit import AuditTaskResponse, StartAuditRequest, StartAuditResponse
 from backend.app.services.audit_service import schedule_audit, serialize_task
+from backend.app.services.auth_service import can_access_user_content, get_current_user, get_user_from_token
 from backend.app.services.events import event_bus
 
 
 router = APIRouter()
 
 
-@router.post("/audit/start", response_model=StartAuditResponse)
-async def start_audit(payload: StartAuditRequest, db: Session = Depends(get_db)) -> StartAuditResponse:
-    task = db.get(AuditTask, payload.task_id)
-    if task is None:
+def get_accessible_task(db: Session, task_id: str, current_user: User) -> AuditTask:
+    task = db.get(AuditTask, task_id)
+    if task is None or not can_access_user_content(current_user, task.user_id):
         raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@router.post("/audit/start", response_model=StartAuditResponse)
+async def start_audit(
+    payload: StartAuditRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StartAuditResponse:
+    task = get_accessible_task(db, payload.task_id, current_user)
     if task.status == "running":
         raise HTTPException(status_code=409, detail="Task is already running")
     if not task.upload_path:
@@ -31,15 +41,23 @@ async def start_audit(payload: StartAuditRequest, db: Session = Depends(get_db))
 
 
 @router.get("/audit/{task_id}", response_model=AuditTaskResponse)
-def get_audit_result(task_id: str, db: Session = Depends(get_db)) -> AuditTaskResponse:
-    task = db.get(AuditTask, task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+def get_audit_result(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AuditTaskResponse:
+    task = get_accessible_task(db, task_id, current_user)
     return AuditTaskResponse.model_validate(serialize_task(task))
 
 
 @router.websocket("/ws/audit/{task_id}")
-async def audit_stream(websocket: WebSocket, task_id: str) -> None:
+async def audit_stream(websocket: WebSocket, task_id: str, db: Session = Depends(get_db)) -> None:
+    current_user = get_user_from_token(db, websocket.query_params.get("access_token"))
+    task = db.get(AuditTask, task_id)
+    if current_user is None or task is None or not can_access_user_content(current_user, task.user_id):
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     history = await event_bus.read_history(task_id)
     for item in history:

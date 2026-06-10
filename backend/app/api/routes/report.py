@@ -8,9 +8,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import AuditTask
+from backend.app.models import AuditTask, User
 from backend.app.schemas.report import ReportSummaryResponse
 from backend.app.services.audit_service import report_paths
+from backend.app.services.auth_service import can_access_user_content, get_current_user
 
 
 router = APIRouter()
@@ -21,9 +22,10 @@ def get_report(
     task_id: str,
     format: Literal["json", "markdown", "html"] | None = None,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     task = db.get(AuditTask, task_id)
-    if task is None:
+    if task is None or not can_access_user_content(current_user, task.user_id):
         raise HTTPException(status_code=404, detail="Task not found")
 
     paths = report_paths(task)
