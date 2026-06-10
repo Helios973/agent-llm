@@ -5,11 +5,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from backend.app.core.config import settings
 from backend.app.core.database import get_db
-from backend.app.models import AuditTask
+from backend.app.models import AuditTask, User
 from backend.app.schemas.audit import UploadResponse
-from backend.app.services.audit_service import ensure_user
+from backend.app.services.auth_service import get_current_user
 from backend.app.services.files import SavedUploadBundle, build_demo_upload, save_uploads
 
 
@@ -57,8 +56,8 @@ async def upload_source_code(
     files: list[UploadFile] | None = File(default=None),
     file: UploadFile | None = File(default=None),
     task_name: str | None = Form(default=None),
-    user_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     uploads: list[UploadFile] = []
     if files:
@@ -69,8 +68,6 @@ async def upload_source_code(
         raise HTTPException(status_code=400, detail="No files uploaded")
 
     task_id = str(uuid4())
-    effective_user_id = user_id or settings.default_user_id
-    ensure_user(db, effective_user_id)
 
     try:
         upload_bundle = await save_uploads(task_id, uploads)
@@ -84,7 +81,7 @@ async def upload_source_code(
     )
     return _create_task_record(
         task_id=task_id,
-        user_id=effective_user_id,
+        user_id=current_user.id,
         task_name=task_name or default_task_name,
         upload_bundle=upload_bundle,
         db=db,
@@ -94,18 +91,16 @@ async def upload_source_code(
 @router.post("/upload/demo", response_model=UploadResponse)
 async def upload_demo_project(
     task_name: str | None = Form(default=None),
-    user_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     task_id = str(uuid4())
-    effective_user_id = user_id or settings.default_user_id
-    ensure_user(db, effective_user_id)
     upload_path = build_demo_upload(task_id)
     upload_bundle = SavedUploadBundle(path=upload_path, names=[upload_path.name])
 
     return _create_task_record(
         task_id=task_id,
-        user_id=effective_user_id,
+        user_id=current_user.id,
         task_name=task_name or "vulnerable_python_app",
         upload_bundle=upload_bundle,
         db=db,

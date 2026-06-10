@@ -14,10 +14,26 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     app_name: str = "AuditPilot Local"
     api_v1_prefix: str = "/api/v1"
+    backend_scheme: str = "http"
+    backend_host: str = "127.0.0.1"
+    backend_port: int = 8000
+    backend_public_url: str | None = None
+    frontend_scheme: str = "http"
+    frontend_host: str = "127.0.0.1"
+    frontend_port: int = 3000
+    frontend_public_url: str | None = None
+    frontend_api_base_url: str | None = None
+    auth_secret_key: str = "change-me-local-auth-secret"
+    auth_token_ttl_seconds: int = 604800
+    admin_bootstrap_username: str = "admin"
+    admin_bootstrap_email: str = "admin@example.com"
+    admin_bootstrap_password: str = "Admin123456!"
+    admin_bootstrap_reset_password: bool = False
     database_url: str = "sqlite:///./backend/data/auditpilot.db"
     redis_url: str = "redis://127.0.0.1:6379/0"
     sql_echo: bool = False
@@ -36,13 +52,24 @@ class Settings(BaseSettings):
     llm_max_findings: int = 8
     llm_context_index_max_files: int = 160
     llm_context_reference_limit: int = 3
-    cors_origins: list[str] = Field(
-        default_factory=lambda: [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
-    )
+    cors_origins: list[str] = Field(default_factory=list)
     storage_root: Path = BACKEND_DIR / "data"
+
+    @property
+    def resolved_frontend_public_url(self) -> str:
+        if self.frontend_public_url:
+            return self.frontend_public_url.rstrip("/")
+        return f"{self.frontend_scheme}://{self.frontend_host}:{self.frontend_port}"
+
+    @property
+    def resolved_cors_origins(self) -> list[str]:
+        if self.cors_origins:
+            return self.cors_origins
+
+        origins = [self.resolved_frontend_public_url]
+        if self.frontend_host == "127.0.0.1":
+            origins.append(f"{self.frontend_scheme}://localhost:{self.frontend_port}")
+        return origins
 
     @property
     def upload_root(self) -> Path:

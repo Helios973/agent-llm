@@ -1,92 +1,80 @@
 # AuditPilot Local Quickstart
 
-## 1. Install dependencies
+## Requirements
 
-```powershell
-venv\Scripts\python.exe -m pip install -r requirements.txt
+- Python 3.12+
+- Windows, macOS, or Linux
+
+## Prepare Environment
+
+```bash
+cp .env.example .env
 ```
 
-## 2. Prepare environment
+On Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-If you already started MySQL or PostgreSQL, change `DATABASE_URL` in `.env`.
+Edit `.env` if you need custom ports, database, Redis, LLM, or the bootstrap admin account.
 
-Examples:
+## Start And Stop
 
-```env
-DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/auditpilot
+Use the single cross-platform controller:
+
+```bash
+python dev.py start
+python dev.py stop
+python dev.py status
+python dev.py restart
 ```
 
-```env
-DATABASE_URL=postgresql+psycopg://postgres:password@127.0.0.1:5432/auditpilot
-```
+`dev.py` will create or reuse `.venv`, install `requirements.txt`, generate `frontend/assets/runtime-config.js`, and start both services.
 
-Redis example:
-
-```env
-REDIS_URL=redis://127.0.0.1:6379/0
-```
-
-## 3. Start frontend + backend together
-
-```powershell
-.\start.ps1
-```
-
-This starts:
+Default URLs:
 
 - Frontend: `http://127.0.0.1:3000`
+- Admin page: `http://127.0.0.1:3000/admin.html`
 - Backend: `http://127.0.0.1:8000`
 - Swagger: `http://127.0.0.1:8000/docs`
 
-Stop both services with:
+Optional port overrides:
+
+```bash
+python dev.py start --backend-port 18000 --frontend-port 13000 --open-browser
+```
+
+You can also set these in `.env`:
+
+```env
+BACKEND_HOST=127.0.0.1
+BACKEND_PORT=8000
+FRONTEND_HOST=127.0.0.1
+FRONTEND_PORT=3000
+```
+
+## Smoke Test
+
+Keep the stack running, then run:
+
+```bash
+.venv/bin/python scripts/smoke_test.py
+```
+
+On Windows:
 
 ```powershell
-.\stop.ps1
+.\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-## 4. Open the web app
+## Logs
 
-Frontend:
+Runtime logs are written to:
 
 ```text
-http://127.0.0.1:3000
+backend/data/runtime/backend.out.log
+backend/data/runtime/backend.err.log
+backend/data/runtime/frontend.out.log
+backend/data/runtime/frontend.err.log
 ```
-
-Swagger UI:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## 5. Quick smoke test
-
-Keep the stack running, then use another terminal:
-
-```powershell
-venv\Scripts\python.exe scripts\smoke_test.py
-```
-
-The script will:
-
-- Upload the sample vulnerable project
-- Start the audit task
-- Poll until completion
-- Print report endpoints and finding summary
-
-## 6. WebSocket logs
-
-Connect to:
-
-```text
-ws://127.0.0.1:8000/api/v1/ws/audit/{task_id}
-```
-
-## Notes
-
-- Sandbox is currently a stub implementation, but the API and workflow node are already reserved.
-- Reports are generated to `backend/data/reports/{task_id}`.
-- Uploads and extracted projects are stored under `backend/data/`.

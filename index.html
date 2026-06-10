@@ -421,7 +421,7 @@
       <div class="nav-chip">Redis Events</div>
 
       <h3>运行入口</h3>
-      <p class="section-note">前端默认在 <code>http://127.0.0.1:3000</code>，后端默认在 <code>http://127.0.0.1:8000</code>。</p>
+      <p class="section-note">前后端地址由本地环境变量和启动脚本生成的运行时配置决定。</p>
       <div class="status-list">
         <div class="status-card">
           <span>后端健康</span>
@@ -494,7 +494,7 @@
           <div class="grid">
             <div class="field">
               <label for="apiBaseInput">后端 API 地址</label>
-              <input id="apiBaseInput" type="text" value="http://127.0.0.1:8000/api/v1" />
+              <input id="apiBaseInput" type="text" placeholder="Loaded from .env" />
             </div>
             <div class="field">
               <label for="taskNameInput">任务名称</label>
@@ -537,7 +537,14 @@
     </section>
   </div>
 
+  <script src="./frontend/assets/runtime-config.js"></script>
   <script>
+    const runtimeConfig = window.AUDITPILOT_CONFIG || {};
+
+    function normalizeBaseUrl(value) {
+      return String(value || "").trim().replace(/\/+$/, "");
+    }
+
     const state = {
       taskId: null,
       taskStatus: "未开始",
@@ -573,8 +580,10 @@
       reportWrap: document.getElementById("reportWrap"),
     };
 
+    elements.apiBaseInput.value = normalizeBaseUrl(runtimeConfig.apiBaseUrl);
+
     function apiBase() {
-      return elements.apiBaseInput.value.replace(/\/+$/, "");
+      return normalizeBaseUrl(elements.apiBaseInput.value || runtimeConfig.apiBaseUrl);
     }
 
     function appendLog(message) {

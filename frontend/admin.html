@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AuditPilot Admin</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <div class="admin-shell">
+      <header class="admin-header">
+        <div class="brand">
+          <div class="brand-mark">AP</div>
+          <div>
+            <strong>用户管理</strong>
+            <p>管理员可以控制账号状态并审计普通用户任务</p>
+          </div>
+        </div>
+        <div class="admin-header-actions">
+          <span id="adminIdentity" class="chip">-</span>
+          <a class="link-button ghost" href="./index.html">返回控制台</a>
+          <button id="adminLogoutBtn" class="ghost" type="button">退出登录</button>
+        </div>
+      </header>
+
+      <main id="adminApp" class="admin-layout" hidden>
+        <section class="panel">
+          <div class="panel-header">
+            <h2>用户列表</h2>
+            <button id="refreshUsersBtn" class="ghost" type="button">刷新</button>
+          </div>
+          <div id="adminMessage" class="auth-message" hidden></div>
+          <div id="usersTable" class="table-wrap"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>用户任务</h2>
+            <span id="selectedUserLabel" class="chip">未选择用户</span>
+          </div>
+          <div id="tasksTable" class="table-wrap empty">选择一个用户后查看其审计任务。</div>
+        </section>
+
+        <section class="panel admin-detail-panel">
+          <h2>审计结果</h2>
+          <div id="adminTaskDetail" class="empty">选择任务后查看漏洞详情。</div>
+        </section>
+      </main>
+
+      <section id="adminGate" class="auth-screen">
+        <div class="auth-card">
+          <div class="brand auth-brand">
+            <div class="brand-mark">AP</div>
+            <div>
+              <strong>需要管理员权限</strong>
+              <p id="adminGateMessage">正在验证登录状态...</p>
+            </div>
+          </div>
+          <a class="link-button primary full-width" href="./index.html">前往登录</a>
+        </div>
+      </section>
+    </div>
+
+    <script src="./assets/runtime-config.js"></script>
+    <script src="./assets/admin.js"></script>
+  </body>
+</html>

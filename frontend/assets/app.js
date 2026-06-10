@@ -1,3 +1,20 @@
+const runtimeConfig = window.AUDITPILOT_CONFIG || {};
+const AUTH_TOKEN_STORAGE_KEY = "auditpilot.accessToken";
+
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function normalizePath(value) {
+  const path = String(value || "/api/v1").trim();
+  const withSlash = path.startsWith("/") ? path : `/${path}`;
+  return withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
+}
+
+function configuredApiBase() {
+  return normalizeBaseUrl(runtimeConfig.apiBaseUrl);
+}
+
 const OWASP_TOP10 = [
   {
     id: "A01:2021",
@@ -57,13 +74,33 @@ const state = {
   progress: 0,
   socket: null,
   pollTimer: null,
+  accessToken: window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
+  currentUser: null,
   logs: ["[system] 等待任务开始..."],
 };
 
 const elements = {
+  appShell: document.getElementById("appShell"),
+  authScreen: document.getElementById("authScreen"),
+  loginTabBtn: document.getElementById("loginTabBtn"),
+  registerTabBtn: document.getElementById("registerTabBtn"),
+  loginForm: document.getElementById("loginForm"),
+  registerForm: document.getElementById("registerForm"),
+  loginIdentifierInput: document.getElementById("loginIdentifierInput"),
+  loginPasswordInput: document.getElementById("loginPasswordInput"),
+  loginSubmitBtn: document.getElementById("loginSubmitBtn"),
+  registerUsernameInput: document.getElementById("registerUsernameInput"),
+  registerEmailInput: document.getElementById("registerEmailInput"),
+  registerPasswordInput: document.getElementById("registerPasswordInput"),
+  registerSubmitBtn: document.getElementById("registerSubmitBtn"),
+  authMessage: document.getElementById("authMessage"),
+  currentUsernameLabel: document.getElementById("currentUsernameLabel"),
+  currentEmailLabel: document.getElementById("currentEmailLabel"),
+  currentRoleLabel: document.getElementById("currentRoleLabel"),
+  adminPageLink: document.getElementById("adminPageLink"),
+  logoutBtn: document.getElementById("logoutBtn"),
   apiBaseInput: document.getElementById("apiBaseInput"),
   taskNameInput: document.getElementById("taskNameInput"),
-  userIdInput: document.getElementById("userIdInput"),
   fileInput: document.getElementById("fileInput"),
   folderInput: document.getElementById("folderInput"),
   pickFolderBtn: document.getElementById("pickFolderBtn"),
@@ -90,8 +127,99 @@ const elements = {
   top10Grid: document.getElementById("top10Grid"),
 };
 
+elements.apiBaseInput.value = configuredApiBase();
+
 function apiBase() {
-  return elements.apiBaseInput.value.replace(/\/+$/, "");
+  return normalizeBaseUrl(elements.apiBaseInput.value || configuredApiBase());
+}
+
+function requireApiBase(scope) {
+  const base = apiBase();
+  if (!base) {
+    appendLog(`[${scope}] API base URL is not configured`);
+  }
+  return base;
+}
+
+function docsUrl() {
+  const configuredDocsUrl = normalizeBaseUrl(runtimeConfig.docsUrl);
+  if (configuredDocsUrl) {
+    return configuredDocsUrl;
+  }
+
+  const base = apiBase();
+  if (!base) {
+    return "";
+  }
+
+  const apiPrefix = normalizePath(runtimeConfig.apiPrefix);
+  return base.endsWith(apiPrefix)
+    ? `${base.slice(0, -apiPrefix.length)}/docs`
+    : `${base}/docs`;
+}
+
+function setAuthMessage(message, level = "error") {
+  if (!message) {
+    elements.authMessage.hidden = true;
+    elements.authMessage.textContent = "";
+    elements.authMessage.className = "auth-message";
+    return;
+  }
+
+  elements.authMessage.hidden = false;
+  elements.authMessage.textContent = message;
+  elements.authMessage.className = `auth-message ${level}`;
+}
+
+function setAuthMode(mode) {
+  const isLogin = mode === "login";
+  elements.loginForm.hidden = !isLogin;
+  elements.registerForm.hidden = isLogin;
+  elements.loginTabBtn.classList.toggle("active", isLogin);
+  elements.registerTabBtn.classList.toggle("active", !isLogin);
+  setAuthMessage("");
+}
+
+function setSession(payload) {
+  state.accessToken = payload.access_token;
+  state.currentUser = payload.user;
+  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, state.accessToken);
+}
+
+function clearSession() {
+  state.accessToken = null;
+  state.currentUser = null;
+  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+}
+
+function showApp() {
+  elements.authScreen.hidden = true;
+  elements.appShell.hidden = false;
+  elements.currentUsernameLabel.textContent = state.currentUser?.username || "-";
+  elements.currentEmailLabel.textContent = state.currentUser?.email || "-";
+  elements.currentRoleLabel.textContent = state.currentUser?.role === "admin" ? "管理员" : "普通用户";
+  elements.adminPageLink.hidden = state.currentUser?.role !== "admin";
+  refreshHealth();
+}
+
+function showAuth(message = "") {
+  stopPolling();
+  closeSocket();
+  elements.appShell.hidden = true;
+  elements.authScreen.hidden = false;
+  if (message) {
+    setAuthMessage(message);
+  } else {
+    setAuthMessage("");
+  }
+}
+
+function withAccessToken(url) {
+  if (!state.accessToken) {
+    return url;
+  }
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}access_token=${encodeURIComponent(state.accessToken)}`;
 }
 
 function escapeHtml(value) {
@@ -293,9 +421,13 @@ function renderFindings(findings) {
 }
 
 function renderReports(taskId) {
-  const htmlUrl = `${apiBase()}/report/${taskId}?format=html`;
-  const markdownUrl = `${apiBase()}/report/${taskId}?format=markdown`;
-  const jsonUrl = `${apiBase()}/report/${taskId}?format=json`;
+  const base = requireApiBase("report");
+  if (!base) {
+    return;
+  }
+  const htmlUrl = withAccessToken(`${base}/report/${taskId}?format=html`);
+  const markdownUrl = withAccessToken(`${base}/report/${taskId}?format=markdown`);
+  const jsonUrl = withAccessToken(`${base}/report/${taskId}?format=json`);
 
   elements.reportWrap.hidden = false;
   elements.reportWrap.className = "report-actions";
@@ -321,7 +453,20 @@ function closeSocket() {
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const { auth = true, headers, ...rest } = options;
+  const requestHeaders = new Headers(headers || {});
+  if (auth && state.accessToken) {
+    requestHeaders.set("Authorization", `Bearer ${state.accessToken}`);
+  }
+
+  const response = await fetch(url, {
+    ...rest,
+    headers: requestHeaders,
+  });
+  if (response.status === 401 && auth) {
+    clearSession();
+    showAuth("登录已过期，请重新登录。");
+  }
   if (!response.ok) {
     const fallback = `${response.status} ${response.statusText}`;
     let detail = fallback;
@@ -337,8 +482,13 @@ async function fetchJson(url, options = {}) {
 }
 
 async function refreshHealth() {
+  const base = requireApiBase("health");
+  if (!base) {
+    return;
+  }
+
   try {
-    const data = await fetchJson(`${apiBase()}/health`);
+    const data = await fetchJson(`${base}/health`);
     setBadge(elements.backendHealth, data.app, "ok");
     setBadge(elements.databaseHealth, data.database, data.database === "ok" ? "ok" : "error");
     setBadge(elements.redisHealth, data.redis, data.redis === "ok" ? "ok" : "error");
@@ -349,6 +499,101 @@ async function refreshHealth() {
     setBadge(elements.redisHealth, "未知", "warn");
     appendLog(`[health] ${error.message}`);
   }
+}
+
+async function restoreSession() {
+  if (!state.accessToken) {
+    showAuth();
+    return;
+  }
+
+  const base = requireApiBase("auth");
+  if (!base) {
+    showAuth("API base URL is not configured");
+    return;
+  }
+
+  try {
+    state.currentUser = await fetchJson(`${base}/auth/me`);
+    showApp();
+  } catch {
+    clearSession();
+    showAuth();
+  }
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  const base = requireApiBase("auth");
+  if (!base) {
+    return;
+  }
+
+  try {
+    elements.loginSubmitBtn.disabled = true;
+    setAuthMessage("");
+    const payload = await fetchJson(`${base}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username_or_email: elements.loginIdentifierInput.value.trim(),
+        password: elements.loginPasswordInput.value,
+      }),
+      auth: false,
+    });
+    setSession(payload);
+    elements.loginPasswordInput.value = "";
+    showApp();
+  } catch (error) {
+    setAuthMessage(error.message);
+  } finally {
+    elements.loginSubmitBtn.disabled = false;
+  }
+}
+
+async function submitRegister(event) {
+  event.preventDefault();
+  const base = requireApiBase("auth");
+  if (!base) {
+    return;
+  }
+
+  try {
+    elements.registerSubmitBtn.disabled = true;
+    setAuthMessage("");
+    const payload = await fetchJson(`${base}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: elements.registerUsernameInput.value.trim(),
+        email: elements.registerEmailInput.value.trim(),
+        password: elements.registerPasswordInput.value,
+      }),
+      auth: false,
+    });
+    setSession(payload);
+    elements.registerPasswordInput.value = "";
+    showApp();
+  } catch (error) {
+    setAuthMessage(error.message);
+  } finally {
+    elements.registerSubmitBtn.disabled = false;
+  }
+}
+
+function logout() {
+  clearSession();
+  state.taskId = null;
+  state.taskStatus = "未开始";
+  state.progress = 0;
+  state.logs = ["[system] 等待任务开始..."];
+  elements.logBox.textContent = state.logs.join("\n");
+  elements.reportWrap.hidden = true;
+  elements.reportWrap.className = "";
+  elements.reportWrap.innerHTML = "";
+  setTaskMeta();
+  renderFindings([]);
+  showAuth();
 }
 
 function rememberTask(taskId, status) {
@@ -374,13 +619,14 @@ async function uploadFile() {
     form.append("files", file, selectedUploadName(file));
   }
   form.append("task_name", elements.taskNameInput.value.trim() || (files.length === 1 ? files[0].name : `${files.length}-files-audit`));
-  if (elements.userIdInput.value.trim()) {
-    form.append("user_id", elements.userIdInput.value.trim());
-  }
 
   try {
     elements.uploadBtn.disabled = true;
-    const data = await fetchJson(`${apiBase()}/upload`, {
+    const base = requireApiBase("upload");
+    if (!base) {
+      return;
+    }
+    const data = await fetchJson(`${base}/upload`, {
       method: "POST",
       body: form,
     });
@@ -397,13 +643,14 @@ async function uploadFile() {
 async function uploadDemoProject() {
   const form = new FormData();
   form.append("task_name", elements.taskNameInput.value.trim() || "demo-audit");
-  if (elements.userIdInput.value.trim()) {
-    form.append("user_id", elements.userIdInput.value.trim());
-  }
 
   try {
     elements.demoBtn.disabled = true;
-    const data = await fetchJson(`${apiBase()}/upload/demo`, {
+    const base = requireApiBase("demo");
+    if (!base) {
+      return;
+    }
+    const data = await fetchJson(`${base}/upload/demo`, {
       method: "POST",
       body: form,
     });
@@ -418,7 +665,11 @@ async function uploadDemoProject() {
 
 function connectSocket(taskId) {
   closeSocket();
-  const wsUrl = apiBase().replace(/^http/i, "ws") + `/ws/audit/${taskId}`;
+  const base = requireApiBase("ws");
+  if (!base) {
+    return;
+  }
+  const wsUrl = withAccessToken(base.replace(/^http/i, "ws") + `/ws/audit/${taskId}`);
   state.socket = new WebSocket(wsUrl);
 
   state.socket.onopen = () => appendLog("[ws] 已连接实时事件通道");
@@ -454,7 +705,11 @@ async function loadTaskResult() {
   }
 
   try {
-    const task = await fetchJson(`${apiBase()}/audit/${state.taskId}`);
+    const base = requireApiBase("result");
+    if (!base) {
+      return;
+    }
+    const task = await fetchJson(`${base}/audit/${state.taskId}`);
     state.taskStatus = task.status;
     if (task.status === "completed") {
       state.progress = 100;
@@ -487,7 +742,11 @@ async function startAudit() {
 
   try {
     elements.startBtn.disabled = true;
-    const payload = await fetchJson(`${apiBase()}/audit/start`, {
+    const base = requireApiBase("audit");
+    if (!base) {
+      return;
+    }
+    const payload = await fetchJson(`${base}/audit/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ task_id: state.taskId }),
@@ -507,10 +766,19 @@ async function startAudit() {
 }
 
 function openDocs() {
-  const docsUrl = apiBase().replace(/\/api\/v1$/, "") + "/docs";
-  window.open(docsUrl, "_blank", "noopener,noreferrer");
+  const target = docsUrl();
+  if (!target) {
+    appendLog("[docs] API base URL is not configured");
+    return;
+  }
+  window.open(target, "_blank", "noopener,noreferrer");
 }
 
+elements.loginTabBtn.addEventListener("click", () => setAuthMode("login"));
+elements.registerTabBtn.addEventListener("click", () => setAuthMode("register"));
+elements.loginForm.addEventListener("submit", submitLogin);
+elements.registerForm.addEventListener("submit", submitRegister);
+elements.logoutBtn.addEventListener("click", logout);
 elements.pickFolderBtn.addEventListener("click", () => elements.folderInput.click());
 elements.fileInput.addEventListener("change", updateUploadSelectionText);
 elements.folderInput.addEventListener("change", updateUploadSelectionText);
@@ -528,4 +796,4 @@ window.addEventListener("beforeunload", () => {
 setTaskMeta();
 renderTop10([]);
 updateUploadSelectionText();
-refreshHealth();
+restoreSession();

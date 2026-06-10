@@ -3,6 +3,8 @@ __pycache__/
 .env
 backend/data/
 venv/
+.venv/
 uvicorn.out.log
 uvicorn.err.log
 scripts/dev-processes.json
+frontend/assets/runtime-config.js
