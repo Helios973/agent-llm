@@ -16,6 +16,7 @@ from backend.app.services.code_security_skill import (
     apply_hard_exclusion_filters,
     load_code_security_skill_resources,
 )
+from backend.app.services.java_audit_skill import build_java_audit_prompt_addendum
 
 
 SOURCE_SUFFIXES = {
@@ -29,6 +30,15 @@ SOURCE_SUFFIXES = {
     ".java",
     ".rb",
     ".rs",
+}
+JAVA_CONTEXT_SUFFIXES = {
+    ".java",
+    ".xml",
+    ".jsp",
+    ".jspx",
+    ".properties",
+    ".yml",
+    ".yaml",
 }
 JS_LIKE_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
 PYTHON_KEYWORDS = {
@@ -67,6 +77,59 @@ PYTHON_KEYWORDS = {
     "with",
     "yield",
 }
+JAVA_KEYWORDS = {
+    "abstract",
+    "assert",
+    "boolean",
+    "break",
+    "byte",
+    "case",
+    "catch",
+    "char",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extends",
+    "final",
+    "finally",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "implements",
+    "import",
+    "instanceof",
+    "int",
+    "interface",
+    "long",
+    "native",
+    "new",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "record",
+    "return",
+    "short",
+    "static",
+    "strictfp",
+    "super",
+    "switch",
+    "synchronized",
+    "this",
+    "throw",
+    "throws",
+    "transient",
+    "try",
+    "void",
+    "volatile",
+    "while",
+}
 SEVERITY_BONUS = {
     "CRITICAL": 40,
     "HIGH": 30,
@@ -75,10 +138,20 @@ SEVERITY_BONUS = {
 }
 IDENTIFIER_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
 PYTHON_IMPORT_PATTERN = re.compile(r"^\s*(?:from\s+([.\w]+)\s+import|import\s+([.\w]+))", re.MULTILINE)
+JAVA_IMPORT_PATTERN = re.compile(r"^\s*import\s+(?:static\s+)?([A-Za-z0-9_.*]+)\s*;", re.MULTILINE)
+JAVA_PACKAGE_PATTERN = re.compile(r"^\s*package\s+([A-Za-z0-9_.]+)\s*;", re.MULTILINE)
 JS_IMPORT_PATTERN = re.compile(
     r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"])|(?:require\(\s*['"]([^'"]+)['"]\s*\))|(?:import\(\s*['"]([^'"]+)['"]\s*\))"""
 )
 PYTHON_DEFINITION_PATTERN = re.compile(r"^\s*(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+JAVA_TYPE_PATTERN = re.compile(
+    r"^\s*(?:public|protected|private|abstract|final|static|\s)*(?:class|interface|enum|record)\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+    re.MULTILINE,
+)
+JAVA_METHOD_PATTERN = re.compile(
+    r"^\s*(?:public|protected|private|static|final|synchronized|abstract|native|default|\s)+[\w<>\[\], ?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
 JS_FUNCTION_PATTERN = re.compile(
     r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)",
     re.MULTILINE,
@@ -110,6 +183,10 @@ class _ContextCandidate:
     line_numbers: set[int] = field(default_factory=set)
     reasons: set[str] = field(default_factory=set)
     linked_files: set[str] = field(default_factory=set)
+
+
+def _is_java_review(language: str) -> bool:
+    return language.lower() == "java"
 
 
 def llm_is_configured() -> bool:
@@ -147,19 +224,27 @@ def _build_file_excerpt(content: str, line_numbers: list[int], max_chars: int) -
     return excerpt[:max_chars] if excerpt else content[:max_chars]
 
 
-def _iter_source_files(project_path: Path) -> list[Path]:
+def _build_full_file_content(content: str) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    return "\n".join(f"{index + 1:04d}: {line}" for index, line in enumerate(lines))
+
+
+def _iter_source_files(project_path: Path, language: str) -> list[Path]:
+    allowed_suffixes = SOURCE_SUFFIXES | JAVA_CONTEXT_SUFFIXES if _is_java_review(language) else SOURCE_SUFFIXES
     files = [
         path
         for path in project_path.rglob("*")
-        if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES and "__pycache__" not in path.parts
+        if path.is_file() and path.suffix.lower() in allowed_suffixes and "__pycache__" not in path.parts
     ]
     files.sort(key=lambda path: path.as_posix())
     return files[: settings.llm_context_index_max_files]
 
 
-def _read_source_map(project_path: Path) -> dict[str, str]:
+def _read_source_map(project_path: Path, language: str) -> dict[str, str]:
     source_map: dict[str, str] = {}
-    for file_path in _iter_source_files(project_path):
+    for file_path in _iter_source_files(project_path, language):
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -203,6 +288,28 @@ def _build_python_module_index(source_map: dict[str, str]) -> dict[str, set[str]
     return index
 
 
+def _java_package_name(content: str) -> str:
+    match = JAVA_PACKAGE_PATTERN.search(content)
+    return match.group(1).strip() if match else ""
+
+
+def _build_java_module_indexes(source_map: dict[str, str]) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    class_index: dict[str, set[str]] = defaultdict(set)
+    package_index: dict[str, set[str]] = defaultdict(set)
+    for path, content in source_map.items():
+        if not path.endswith(".java"):
+            continue
+        package_name = _java_package_name(content)
+        class_name = PurePosixPath(path).stem
+        if class_name:
+            class_index[class_name].add(path)
+            if package_name:
+                class_index[f"{package_name}.{class_name}"].add(path)
+        if package_name:
+            package_index[package_name].add(path)
+    return class_index, package_index
+
+
 def _resolve_python_import(module_name: str, current_path: str, module_index: dict[str, set[str]]) -> set[str]:
     normalized_name = module_name.strip()
     if not normalized_name:
@@ -232,6 +339,22 @@ def _resolve_python_import(module_name: str, current_path: str, module_index: di
     return resolved
 
 
+def _resolve_java_import(
+    module_name: str,
+    class_index: dict[str, set[str]],
+    package_index: dict[str, set[str]],
+) -> set[str]:
+    normalized_name = module_name.strip()
+    if not normalized_name:
+        return set()
+
+    if normalized_name.endswith(".*"):
+        return set(package_index.get(normalized_name[:-2], set()))
+
+    simple_name = normalized_name.rsplit(".", 1)[-1]
+    return set(class_index.get(normalized_name, set())) | set(class_index.get(simple_name, set()))
+
+
 def _resolve_js_import(module_name: str, current_path: str, source_paths: set[str]) -> set[str]:
     normalized_name = module_name.strip()
     if not normalized_name.startswith("."):
@@ -255,7 +378,9 @@ def _resolve_js_import(module_name: str, current_path: str, source_paths: set[st
 def _extract_local_imports(
     path: str,
     content: str,
-    module_index: dict[str, set[str]],
+    python_module_index: dict[str, set[str]],
+    java_class_index: dict[str, set[str]],
+    java_package_index: dict[str, set[str]],
     source_paths: set[str],
 ) -> set[str]:
     imports: set[str] = set()
@@ -263,7 +388,13 @@ def _extract_local_imports(
     if path.endswith(".py"):
         for match in PYTHON_IMPORT_PATTERN.finditer(content):
             module_name = match.group(1) or match.group(2) or ""
-            imports.update(_resolve_python_import(module_name, path, module_index))
+            imports.update(_resolve_python_import(module_name, path, python_module_index))
+        imports.discard(path)
+        return imports
+
+    if path.endswith(".java"):
+        for match in JAVA_IMPORT_PATTERN.finditer(content):
+            imports.update(_resolve_java_import(match.group(1), java_class_index, java_package_index))
         imports.discard(path)
         return imports
 
@@ -279,12 +410,20 @@ def _extract_local_imports(
 
 def _build_import_graph(source_map: dict[str, str]) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     source_paths = set(source_map)
-    module_index = _build_python_module_index(source_map)
+    python_module_index = _build_python_module_index(source_map)
+    java_class_index, java_package_index = _build_java_module_indexes(source_map)
     import_graph: dict[str, set[str]] = {}
     reverse_graph: dict[str, set[str]] = defaultdict(set)
 
     for path, content in source_map.items():
-        imports = _extract_local_imports(path, content, module_index, source_paths)
+        imports = _extract_local_imports(
+            path,
+            content,
+            python_module_index,
+            java_class_index,
+            java_package_index,
+            source_paths,
+        )
         import_graph[path] = imports
         for imported in imports:
             reverse_graph[imported].add(path)
@@ -294,6 +433,8 @@ def _build_import_graph(source_map: dict[str, str]) -> tuple[dict[str, set[str]]
 
 def _extract_definitions(path: str, content: str) -> dict[str, list[int]]:
     patterns = [PYTHON_DEFINITION_PATTERN]
+    if path.endswith(".java"):
+        patterns.extend([JAVA_TYPE_PATTERN, JAVA_METHOD_PATTERN])
     if Path(path).suffix.lower() in JS_LIKE_SUFFIXES:
         patterns.extend([JS_FUNCTION_PATTERN, JS_VARIABLE_PATTERN])
 
@@ -329,9 +470,11 @@ def _interesting_identifiers(content: str, line_numbers: list[int], limit: int =
         selected_chunks.extend(lines[:40])
 
     counts: Counter[str] = Counter()
-    for token in IDENTIFIER_PATTERN.findall("\n".join(selected_chunks)):
+    chunk_text = "\n".join(selected_chunks)
+    reserved_keywords = PYTHON_KEYWORDS | (JAVA_KEYWORDS if any(marker in chunk_text for marker in ("package ", "import java.", "public class")) else set())
+    for token in IDENTIFIER_PATTERN.findall(chunk_text):
         lowered = token.lower()
-        if lowered in PYTHON_KEYWORDS:
+        if lowered in reserved_keywords:
             continue
         counts[token] += 1
 
@@ -382,10 +525,11 @@ def _add_candidate(
 def build_review_context_memory(
     *,
     project_path: Path,
+    language: str,
     entrypoint: str,
     scan_results: list[AuditFinding],
 ) -> ReviewContextMemory:
-    source_map = _read_source_map(project_path)
+    source_map = _read_source_map(project_path, language)
     if not source_map:
         return ReviewContextMemory(files=(), relationship_notes=(), summary="No source files available.")
 
@@ -478,7 +622,8 @@ def build_review_context_memory(
             reason="project context fallback",
             line_numbers={1},
         )
-        for linked_path in sorted(import_graph.get(fallback_path, set()))[: max(settings.llm_max_review_files - 1, 0)]:
+        selected_limit = settings.java_llm_max_review_files if _is_java_review(language) else settings.llm_max_review_files
+        for linked_path in sorted(import_graph.get(fallback_path, set()))[: max(selected_limit - 1, 0)]:
             _add_candidate(
                 candidates,
                 linked_path,
@@ -491,7 +636,8 @@ def build_review_context_memory(
         candidates,
         key=lambda path: (-candidates[path].score, path),
     )
-    selected_paths = ordered_paths[: settings.llm_max_review_files]
+    selected_limit = settings.java_llm_max_review_files if _is_java_review(language) else settings.llm_max_review_files
+    selected_paths = ordered_paths[: selected_limit]
     selected_set = set(selected_paths)
 
     relationship_notes: list[str] = []
@@ -510,11 +656,14 @@ def build_review_context_memory(
         )
         relationship_bits = ", ".join(linked_files[:4]) or "none"
         relationship_notes.append(f"{path} -> {relationship_bits}")
-        excerpt = _build_file_excerpt(
-            content,
-            sorted(candidate.line_numbers),
-            settings.llm_max_file_chars,
-        )
+        if _is_java_review(language) and settings.java_llm_full_file_context and Path(path).suffix.lower() in JAVA_CONTEXT_SUFFIXES:
+            excerpt = _build_full_file_content(content)
+        else:
+            excerpt = _build_file_excerpt(
+                content,
+                sorted(candidate.line_numbers),
+                settings.llm_max_file_chars,
+            )
         context_files.append(
             ReviewContextFile(
                 path=path,
@@ -529,6 +678,8 @@ def build_review_context_memory(
         f"selected {len(context_files)} linked files",
         f"anchors: {', '.join(anchor_list[:4]) or 'none'}",
     ]
+    if _is_java_review(language) and settings.java_llm_full_file_context:
+        summary_parts.append("java full-file context enabled")
     if entrypoint:
         summary_parts.append(f"entrypoint: {entrypoint}")
     return ReviewContextMemory(
@@ -569,6 +720,7 @@ def _build_user_prompt(
     context_memory: ReviewContextMemory,
     resources: CodeSecuritySkillResources,
     excluded_scan_summaries: list[dict[str, Any]],
+    java_skill_addendum: str,
 ) -> str:
     relationship_notes = "\n".join(f"- {note}" for note in context_memory.relationship_notes) or "- none"
     file_blocks = "\n\n".join(
@@ -587,10 +739,25 @@ def _build_user_prompt(
         ]
     )
 
+    java_skill_block = ""
+    if java_skill_addendum:
+        java_skill_block = (
+            "Installed Java Audit Skill Guidance:\n"
+            f"```text\n{java_skill_addendum}\n```\n\n"
+        )
+
+    language_specific_instructions = ""
+    if _is_java_review(language):
+        language_specific_instructions = (
+            "Java review rule: read every provided Java/XML/JSP/properties context file completely before deciding.\n"
+            "For Java findings, exclude anything that lacks a concrete request-to-sink path, auth bypass path, or component-version proof.\n"
+        )
+
     return (
         "Follow the bundled Code Security Review skill exactly.\n"
         "Execute the workflow strictly in order: Phase 1 audit, Phase 2 filter, then Phase 3 report.\n"
         "Treat the provided files as one linked code context and trace data flow across file boundaries.\n"
+        f"{language_specific_instructions}"
         "Do not keep any finding that violates the hard exclusions or has confidence_score < 7.\n"
         "Return exactly one JSON object with this shape: {\"findings\": [...], \"filter_summary\": [...]}.\n"
         "Only include KEPT findings in findings.\n"
@@ -614,6 +781,7 @@ def _build_user_prompt(
         f"{relationship_notes}\n\n"
         "Relevant Linked Code Context:\n"
         f"{file_blocks or 'No code context available.'}\n\n"
+        f"{java_skill_block}"
         "Bundled Audit Methodology:\n"
         f"```text\n{resources.audit_prompt}\n```\n\n"
         "Bundled Filtering Rules:\n"
@@ -789,9 +957,16 @@ async def review_project_with_llm(
     filtered_scan_results, excluded_scan_summaries = apply_hard_exclusion_filters(scan_results)
     context_memory = build_review_context_memory(
         project_path=project_path,
+        language=language,
         entrypoint=entrypoint,
         scan_results=filtered_scan_results,
     )
+    java_skill_addendum = ""
+    if language.lower() == "java":
+        java_skill_addendum = build_java_audit_prompt_addendum(
+            framework=framework,
+            entrypoint=entrypoint,
+        )
     if not context_memory.files:
         return [], "No usable cross-file context was collected for the model"
 
@@ -811,6 +986,7 @@ async def review_project_with_llm(
         context_memory=context_memory,
         resources=resources,
         excluded_scan_summaries=excluded_scan_summaries,
+        java_skill_addendum=java_skill_addendum,
     )
     payload = _build_request_payload(system_prompt, user_prompt, user_id or task_id)
 

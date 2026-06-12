@@ -51,6 +51,48 @@ class BaselineScannerTests(unittest.TestCase):
             findings = baseline.run(project_path)
             self.assertTrue(any(item["title"] == "Potential Path Traversal / File Inclusion" for item in findings))
 
+    def test_detects_mybatis_xml_sql_injection_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            mapper_dir = project_path / "mapper"
+            mapper_dir.mkdir()
+            (mapper_dir / "SysRoleMapper.xml").write_text(
+                "<mapper namespace=\"demo.SysRoleMapper\">\n"
+                "<select id=\"selectRoleList\" resultType=\"SysRole\">\n"
+                "  select * from sys_role\n"
+                "  <where>\n"
+                "    ${params.dataScope}\n"
+                "  </where>\n"
+                "</select>\n"
+                "</mapper>\n",
+                encoding="utf-8",
+            )
+
+            findings = baseline.run(project_path)
+
+            sql_finding = next(item for item in findings if item["title"] == "Potential SQL Injection")
+            enriched = enrich_finding(sql_finding, project_path)
+            self.assertEqual(sql_finding["file_path"], "mapper/SysRoleMapper.xml")
+            self.assertEqual(enriched["cwe_id"], "CWE-89")
+
+    def test_detects_java_download_path_traversal_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            (project_path / "CommonController.java").write_text(
+                "public class CommonController {\n"
+                "    public void fileDownload(String fileName, HttpServletResponse response) throws Exception {\n"
+                "        String realFileName = System.currentTimeMillis() + fileName.substring(fileName.indexOf(\"_\") + 1);\n"
+                "        String filePath = Global.getDownloadPath() + fileName;\n"
+                "        FileUtils.writeBytes(filePath, response.getOutputStream());\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            findings = baseline.run(project_path)
+
+        self.assertTrue(any(item["title"] == "Potential Path Traversal / File Inclusion" for item in findings))
+
     def test_does_not_match_file_substring_inside_profile_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir)
@@ -68,6 +110,20 @@ class BaselineScannerTests(unittest.TestCase):
             project_path = Path(temp_dir)
             (project_path / "jquery.min.js").write_text(
                 "function x(){return /a/.exec(location.search)};" * 400,
+                encoding="utf-8",
+            )
+
+            findings = baseline.run(project_path)
+
+        self.assertEqual(findings, [])
+
+    def test_skips_target_build_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            target_dir = project_path / "target" / "classes"
+            target_dir.mkdir(parents=True)
+            (target_dir / "download.php").write_text(
+                "<?php\n$file = $_GET['file'];\nreadfile($file);\n",
                 encoding="utf-8",
             )
 

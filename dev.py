@@ -162,7 +162,6 @@ def ensure_dependencies(python: Path) -> None:
 def assert_port_free(host: str, port: int, name: str) -> None:
     probe_host = client_host(host)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((probe_host, port))
         except OSError as exc:

@@ -65,6 +65,7 @@ class BaselineRule:
     source_tokens: tuple[str, ...] = ()
     required_context_tokens: tuple[str, ...] = ()
     sanitizer_tokens: tuple[str, ...] = ()
+    path_tokens: tuple[str, ...] = ()
     suffixes: tuple[str, ...] = ()
     window_radius: int = 2
 
@@ -123,6 +124,17 @@ RULES = (
         window_radius=2,
     ),
     BaselineRule(
+        rule_id="mybatis-xml-sql-injection",
+        title="Potential SQL Injection",
+        description="检测到 MyBatis XML 中使用 `${...}` 拼接 SQL 片段，若参数可被外部控制，可能形成 SQL 注入。",
+        severity="HIGH",
+        sink_tokens=("${",),
+        required_context_tokens=("<select", "<update", "<delete", "<insert", "select ", "update ", "delete ", "insert ", " from ", " where ", " order by "),
+        path_tokens=("mapper",),
+        suffixes=(".xml",),
+        window_radius=6,
+    ),
+    BaselineRule(
         rule_id="command-injection",
         title="Potential Command Injection",
         description="检测到命令执行 sink，若参数受外部输入影响，可能触发系统命令注入。",
@@ -160,10 +172,10 @@ RULES = (
         title="Potential Path Traversal / File Inclusion",
         description="检测到文件读取、下载或包含 sink 附近存在可控路径，可能导致目录穿越、本地文件包含或任意文件读取。",
         severity="HIGH",
-        sink_tokens=("include(", "include_once(", "require(", "require_once(", "file_get_contents(", "readfile(", "fopen(", "open(", "send_file(", "fs.readfile("),
+        sink_tokens=("include(", "include_once(", "require(", "require_once(", "file_get_contents(", "readfile(", "fopen(", "open(", "send_file(", "fs.readfile(", "fileutils.writebytes(", "files.copy(", "readallbytes(", "new fileinputstream("),
         source_tokens=PATH_SOURCE_TOKENS,
-        required_context_tokens=("path", "file", "page", "template", "download", "../"),
-        suffixes=(".php", ".py", ".js", ".ts"),
+        required_context_tokens=("path", "file", "page", "template", "download", "filepath", "filename", "downloadpath", "../"),
+        suffixes=(".php", ".py", ".js", ".ts", ".java"),
         window_radius=2,
     ),
     BaselineRule(
@@ -233,6 +245,11 @@ def _contains_any_token(text: str, tokens: tuple[str, ...]) -> bool:
     return any(_token_present(text, token) for token in tokens)
 
 
+def _path_contains_any_token(path: str, tokens: tuple[str, ...]) -> bool:
+    lowered_path = path.lower()
+    return any(token.lower() in lowered_path for token in tokens)
+
+
 def _build_finding(
     *,
     rule: BaselineRule,
@@ -287,6 +304,8 @@ def run(project_path: Path) -> list[dict[str, object]]:
 
             for rule in RULES:
                 if not _applies_to_file(rule, file_path):
+                    continue
+                if rule.path_tokens and not _path_contains_any_token(relative_path, rule.path_tokens):
                     continue
 
                 matched_sink = next((token for token in rule.sink_tokens if token.lower() in lowered_line), None)

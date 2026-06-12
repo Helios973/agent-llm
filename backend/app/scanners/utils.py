@@ -4,8 +4,29 @@ from pathlib import Path
 
 
 IGNORED_SUFFIXES = {".pyc", ".pyo", ".so", ".dll", ".exe", ".class", ".png", ".jpg", ".jpeg", ".gif", ".pdf"}
-IGNORED_DIR_NAMES = {".git", "__pycache__", "node_modules", "vendor", "dist", "build", ".venv", "venv"}
+IGNORED_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".idea",
+    "__pycache__",
+    "__macosx",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "target",
+    "out",
+    ".venv",
+    "venv",
+}
 TEXT_MINIFIED_SUFFIXES = {".js", ".css"}
+THIRD_PARTY_PATH_MARKERS = {
+    ("static", "ajax", "libs"),
+    ("static", "vendor"),
+    ("public", "vendor"),
+    ("webjars",),
+}
 
 
 def is_probably_minified(file_path: Path, content: str) -> bool:
@@ -26,8 +47,11 @@ def is_probably_minified(file_path: Path, content: str) -> bool:
 
 
 def should_skip_text_scan(file_path: Path, content: str | None = None) -> bool:
-    lowered_parts = {part.lower() for part in file_path.parts}
-    if lowered_parts & IGNORED_DIR_NAMES:
+    lowered_parts = tuple(part.lower() for part in file_path.parts)
+    lowered_part_set = set(lowered_parts)
+    if lowered_part_set & IGNORED_DIR_NAMES:
+        return True
+    if any(marker == lowered_parts[index : index + len(marker)] for marker in THIRD_PARTY_PATH_MARKERS for index in range(len(lowered_parts) - len(marker) + 1)):
         return True
     if file_path.suffix.lower() in IGNORED_SUFFIXES:
         return True

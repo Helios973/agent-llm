@@ -53,6 +53,7 @@ class ReviewContextMemoryTests(unittest.TestCase):
 
             memory = build_review_context_memory(
                 project_path=project_path,
+                language="python",
                 entrypoint="api.py",
                 scan_results=[
                     {
@@ -87,6 +88,7 @@ class ReviewContextMemoryTests(unittest.TestCase):
             context_memory=memory,
             resources=resources,
             excluded_scan_summaries=[],
+            java_skill_addendum="",
         )
 
         self.assertIn("Bundled Filtering Rules:", prompt)

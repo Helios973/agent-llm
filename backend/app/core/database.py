@@ -13,15 +13,20 @@ class Base(DeclarativeBase):
 
 
 connect_args: dict[str, object] = {}
+engine_kwargs: dict[str, object] = {
+    "echo": settings.sql_echo,
+    "future": True,
+    "connect_args": connect_args,
+}
+
 if settings.database_url.startswith("sqlite"):
     connect_args["check_same_thread"] = False
+elif settings.database_url.startswith("mysql"):
+    # Avoid stale pooled MySQL connections causing intermittent 500s.
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_recycle"] = 1800
 
-engine = create_engine(
-    settings.database_url,
-    echo=settings.sql_echo,
-    future=True,
-    connect_args=connect_args,
-)
+engine = create_engine(settings.database_url, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 

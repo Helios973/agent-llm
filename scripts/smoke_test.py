@@ -30,6 +30,15 @@ def env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+def env_int(name: str, default: int) -> int:
+    raw = env(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+    return value if value > 0 else default
+
+
 def client_host(host: str) -> str:
     return "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
 
@@ -58,11 +67,13 @@ def api_base_url() -> str:
 
 def main() -> None:
     api_base = api_base_url()
+    poll_seconds = env_int("SMOKE_TEST_MAX_WAIT_SECONDS", 120)
     sample_file = ROOT / "examples" / "vulnerable_python_app" / "app.py"
     if not sample_file.exists():
         raise FileNotFoundError(f"Sample file not found: {sample_file}")
 
     print(f"Using API base: {api_base}")
+    print(f"Smoke test timeout: {poll_seconds} seconds")
 
     with httpx.Client(timeout=30.0) as client:
         username = f"smoke-{uuid4().hex[:10]}"
@@ -94,12 +105,13 @@ def main() -> None:
         print("Audit started:", response.json())
 
         task = None
-        for _ in range(60):
+        for index in range(poll_seconds):
             time.sleep(1)
             response = client.get(f"{api_base}/audit/{task_id}", headers=headers)
             response.raise_for_status()
             task = response.json()
-            print("Current status:", task["status"], "findings:", len(task["findings"]))
+            if index % 5 == 0 or task["status"] in {"completed", "failed"}:
+                print("Current status:", task["status"], "findings:", len(task["findings"]))
             if task["status"] in {"completed", "failed"}:
                 break
 

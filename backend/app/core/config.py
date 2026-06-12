@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     llm_max_findings: int = 8
     llm_context_index_max_files: int = 160
     llm_context_reference_limit: int = 3
+    java_audit_skills_enabled: bool = True
+    java_audit_skills_root: Path | None = Field(default_factory=lambda: Path.home() / ".codex" / "skills")
+    java_llm_full_file_context: bool = True
+    java_llm_max_review_files: int = 4
+    java_heuristic_requires_corroboration: bool = True
+    java_corroboration_line_radius: int = 8
     cors_origins: list[str] = Field(default_factory=list)
     storage_root: Path = BACKEND_DIR / "data"
 

@@ -9,6 +9,7 @@ AuditPilot is a local code security audit prototype built with FastAPI, a static
 - Bootstrap administrator account from `.env`
 - Multi-file and directory upload
 - Static and LLM-assisted review flow
+- Optional Java audit skill integration from `RuoJi6/java-audit-skills`
 - WebSocket progress events
 - HTML, Markdown, and JSON reports
 - Admin page for user control and auditing user tasks
@@ -64,9 +65,13 @@ ADMIN_BOOTSTRAP_USERNAME=admin
 ADMIN_BOOTSTRAP_EMAIL=admin@example.com
 ADMIN_BOOTSTRAP_PASSWORD=Admin123456!
 ADMIN_BOOTSTRAP_RESET_PASSWORD=false
+JAVA_AUDIT_SKILLS_ENABLED=true
+JAVA_AUDIT_SKILLS_ROOT=
 ```
 
 The bootstrap admin is ensured on startup. Existing admin passwords are not overwritten unless `ADMIN_BOOTSTRAP_RESET_PASSWORD=true`.
+If `JAVA_AUDIT_SKILLS_ROOT` is empty, the backend defaults to `~/.codex/skills` and will automatically append installed Java audit skill guidance for Java projects.
+For Java projects, you can enable full-file review context and stricter heuristic corroboration to cut down false positives in uploaded code.
 
 ## Start And Stop
 

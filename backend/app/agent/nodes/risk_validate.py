@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from backend.app.agent.nodes.helpers import append_log, publish_agent_state
 from backend.app.agent.state import AuditFinding, AuditState
+from backend.app.core.config import settings
+from backend.app.services.code_security_skill import apply_hard_exclusion_filters
 from backend.app.services.vulnerability_catalog import enrich_finding
 
 
@@ -14,6 +16,8 @@ SEVERITY_TO_CVSS = {
     "MEDIUM": 6.5,
     "LOW": 3.7,
 }
+HEURISTIC_SOURCES = {"BaselineHeuristic", "Top10Heuristic"}
+JAVA_REVIEW_SUFFIXES = {".java", ".xml", ".jsp", ".jspx", ".properties", ".yml", ".yaml"}
 
 
 def _merge_values(primary: Any, secondary: Any) -> Any:
@@ -88,12 +92,85 @@ def deduplicate_findings(items: list[AuditFinding], project_root: Path) -> list[
     )
 
 
+def _is_java_review_file(file_path: str) -> bool:
+    return PurePosixPath(file_path).suffix.lower() in JAVA_REVIEW_SUFFIXES
+
+
+def _has_strong_nearby_corroboration(
+    finding: AuditFinding,
+    findings: list[AuditFinding],
+) -> bool:
+    candidate_path = str(finding.get("file_path", ""))
+    candidate_line = int(finding.get("line_number", 1) or 1)
+    for other in findings:
+        if other is finding:
+            continue
+        other_sources = {part.strip() for part in str(other.get("source", "")).split(",") if part.strip()}
+        if not (other_sources - HEURISTIC_SOURCES):
+            continue
+        if str(other.get("file_path", "")) != candidate_path:
+            continue
+        other_line = int(other.get("line_number", 1) or 1)
+        if abs(candidate_line - other_line) <= settings.java_corroboration_line_radius:
+            return True
+    return False
+
+
+def filter_java_false_positives(findings: list[AuditFinding]) -> tuple[list[AuditFinding], list[dict[str, str]]]:
+    if not settings.java_heuristic_requires_corroboration:
+        return findings, []
+
+    kept: list[AuditFinding] = []
+    excluded: list[dict[str, str]] = []
+    for finding in findings:
+        file_path = str(finding.get("file_path", ""))
+        if not _is_java_review_file(file_path):
+            kept.append(finding)
+            continue
+
+        sources = {part.strip() for part in str(finding.get("source", "")).split(",") if part.strip()}
+        if not sources or (sources - HEURISTIC_SOURCES):
+            kept.append(finding)
+            continue
+
+        if _has_strong_nearby_corroboration(finding, findings):
+            kept.append(finding)
+            continue
+
+        excluded.append(
+            {
+                "title": str(finding.get("title", "")),
+                "file_path": file_path,
+                "reason": "Standalone Java heuristic finding without LLM/strong-scanner corroboration",
+            }
+        )
+
+    return kept, excluded
+
+
 async def run(state: AuditState) -> dict[str, object]:
-    await publish_agent_state(state["task_id"], "RiskValidate", "running", "正在归并结果、映射 OWASP Top 10 并补全复现信息", 88)
+    await publish_agent_state(
+        state["task_id"],
+        "RiskValidate",
+        "running",
+        "正在归并结果、映射 OWASP Top 10 并补全复现信息",
+        88,
+    )
 
     merged = [*state["scan_results"], *state["llm_results"]]
+    merged, excluded_hard = apply_hard_exclusion_filters(merged)
     findings = deduplicate_findings(merged, Path(state["project_path"]))
+
+    excluded_java: list[dict[str, str]] = []
+    if str(state["language"]).lower() == "java":
+        findings, excluded_java = filter_java_false_positives(findings)
+
     message = f"风险归并完成，最终保留 {len(findings)} 条漏洞"
+    if excluded_hard or excluded_java:
+        message = (
+            f"{message}，已排除 {len(excluded_hard)} 条本地硬规则误报"
+            f" 和 {len(excluded_java)} 条 Java 启发式误报"
+        )
 
     await publish_agent_state(state["task_id"], "RiskValidate", "completed", message, 92)
     return {
