@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AuditPilot Frontend</title>
-    <link rel="stylesheet" href="./assets/styles.css" />
+    <title>AuditPilot // Cyber Console</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=dev-20260616-1" />
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
@@ -13,7 +13,7 @@
           <div class="brand-mark">AP</div>
           <div>
             <strong>AuditPilot</strong>
-            <p>登录后使用安全审计控制台</p>
+            <p>登录后进入极客风安全审计控制台</p>
           </div>
         </div>
 
@@ -47,7 +47,32 @@
             <span>密码</span>
             <input id="registerPasswordInput" type="password" autocomplete="new-password" minlength="8" required />
           </label>
-          <button id="registerSubmitBtn" class="primary full-width" type="submit">创建账号</button>
+          <div class="verify-card" aria-live="polite">
+            <div class="verify-card-header">
+              <strong>真人校验</strong>
+              <button id="registerVerifyResetBtn" class="ghost verify-reset-btn" type="button">重置</button>
+            </div>
+            <div id="registerSliderCaptcha" class="slider-captcha" data-status="idle">
+              <div id="registerSliderTrack" class="slider-track">
+                <div id="registerSliderFill" class="slider-fill"></div>
+                <span id="registerSliderLabel" class="slider-label">请拖动滑块完成人机验证</span>
+                <button
+                  id="registerSliderThumb"
+                  class="slider-thumb"
+                  type="button"
+                  role="slider"
+                  aria-label="拖动滑块进行真人验证"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow="0"
+                >
+                  <span aria-hidden="true"></span>
+                </button>
+              </div>
+            </div>
+            <p id="registerVerifyHint" class="helper-text verify-hint">注册前需先通过滑动验证。</p>
+          </div>
+          <button id="registerSubmitBtn" class="primary full-width" type="submit" disabled>创建账号</button>
         </form>
 
         <div id="authMessage" class="auth-message" hidden></div>
@@ -60,12 +85,12 @@
           <div class="brand-mark">AP</div>
           <div>
             <strong>AuditPilot</strong>
-            <p>前后端分离安全审计控制台</p>
+            <p>代码审计 · 任务编排 · 漏洞追踪</p>
           </div>
         </div>
 
         <div class="sidebar-panel">
-          <h2>当前账号</h2>
+          <h2>当前身份</h2>
           <div class="account-box">
             <strong id="currentUsernameLabel">-</strong>
             <span id="currentEmailLabel">-</span>
@@ -76,7 +101,7 @@
         </div>
 
         <div class="sidebar-panel">
-          <h2>服务状态</h2>
+          <h2>系统状态</h2>
           <div class="status-list">
             <div class="status-row">
               <span>后端</span>
@@ -112,45 +137,42 @@
           <div class="progress-track">
             <div id="progressBar" class="progress-bar"></div>
           </div>
-          <button id="refreshHealthBtn" class="ghost" type="button">刷新后端状态</button>
+          <button id="refreshHealthBtn" class="ghost" type="button">刷新系统状态</button>
         </div>
       </aside>
 
       <main class="surface">
         <section class="hero">
           <div>
-            <span class="eyebrow">Separated Frontend + Backend</span>
-            <h1>把上传、审计、Top 10 漏洞分类和详细报告串成一条可视化流程</h1>
-            <p>
-              前端只负责交互和展示，所有上传、扫描、事件流和报告生成都由 FastAPI 后端提供。
-              新报告会带上 OWASP Top 10 分类、代码证据、复现步骤、影响说明和修复建议。
-            </p>
+            <span class="eyebrow">Cyber Audit Matrix</span>
+            <h1>AuditPilot</h1>
+            <p>代码安全审计控制台</p>
           </div>
           <div class="hero-stats">
-            <div class="stat-card">
-              <span>高危</span>
+            <article class="stat-card">
+              <span>High Risk</span>
               <strong id="highCount">0</strong>
-            </div>
-            <div class="stat-card">
-              <span>中危</span>
+            </article>
+            <article class="stat-card">
+              <span>Medium Risk</span>
               <strong id="mediumCount">0</strong>
-            </div>
-            <div class="stat-card">
-              <span>低危</span>
+            </article>
+            <article class="stat-card">
+              <span>Low Risk</span>
               <strong id="lowCount">0</strong>
-            </div>
-            <div class="stat-card">
-              <span>漏洞总数</span>
+            </article>
+            <article class="stat-card">
+              <span>Total Findings</span>
               <strong id="totalCount">0</strong>
-            </div>
+            </article>
           </div>
         </section>
 
-        <section class="content">
+        <section class="main-content">
           <article class="panel">
             <div class="panel-header">
-              <h2>连接配置</h2>
-              <button id="docsBtn" class="ghost" type="button">打开 Swagger</button>
+              <h2>任务控制台</h2>
+              <span class="chip">Source Intake</span>
             </div>
             <div class="grid">
               <label class="field">
@@ -167,42 +189,55 @@
                 <input id="folderInput" type="file" multiple webkitdirectory hidden />
                 <div class="upload-picker-row">
                   <button id="pickFolderBtn" class="ghost" type="button">选择目录</button>
-                  <span id="uploadSelectionText" class="helper-text">未选择文件或目录</span>
+                  <span id="uploadSelectionText" class="helper-text">尚未选择文件或目录</span>
                 </div>
               </label>
             </div>
 
             <div class="actions">
-              <button id="uploadBtn" class="secondary" type="button">上传本地文件</button>
+              <button id="uploadBtn" class="secondary" type="button">上传本地源码</button>
               <button id="demoBtn" class="ghost" type="button">导入示例项目</button>
+              <button id="docsBtn" class="ghost" type="button">API 文档</button>
               <button id="startBtn" class="primary" type="button" disabled>启动审计</button>
             </div>
           </article>
 
           <article class="panel">
-            <h2>OWASP Top 10 覆盖</h2>
+            <div class="panel-header">
+              <h2>OWASP Top 10 覆盖矩阵</h2>
+              <span class="chip">Threat Map</span>
+            </div>
             <div id="top10Grid" class="top10-grid"></div>
           </article>
 
           <article class="panel">
-            <h2>实时日志</h2>
-            <div id="logBox" class="log-box">[system] 等待任务开始...</div>
+            <div class="panel-header">
+              <h2>实时日志流</h2>
+              <span class="chip">Live Stream</span>
+            </div>
+            <div id="logBox" class="log-box">[system] waiting for task bootstrap...</div>
           </article>
 
           <article class="panel">
-            <h2>漏洞详情</h2>
-            <div id="findingsWrap" class="empty">任务完成后，这里会展示带复现步骤和修复建议的漏洞详情。</div>
+            <div class="panel-header">
+              <h2>漏洞详情</h2>
+              <span class="chip">Findings</span>
+            </div>
+            <div id="findingsWrap" class="empty">任务完成后，这里会展示漏洞细节、复现路径与修复建议。</div>
           </article>
 
           <article class="panel">
-            <h2>报告下载</h2>
+            <div class="panel-header">
+              <h2>报告下载</h2>
+              <span class="chip">Artifacts</span>
+            </div>
             <div id="reportWrap" hidden></div>
           </article>
         </section>
       </main>
     </div>
 
-    <script src="./assets/runtime-config.js"></script>
-    <script src="./assets/app.js"></script>
+    <script src="./assets/runtime-config.js?v=dev-20260616-1"></script>
+    <script src="./assets/app.js?v=dev-20260616-1"></script>
   </body>
 </html>

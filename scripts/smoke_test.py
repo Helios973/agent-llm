@@ -77,10 +77,22 @@ def main() -> None:
 
     with httpx.Client(timeout=30.0) as client:
         username = f"smoke-{uuid4().hex[:10]}"
+        challenge = client.post(f"{api_base}/auth/human-check/challenge")
+        challenge.raise_for_status()
+        challenge_payload = challenge.json()
+        time.sleep(max(float(challenge_payload["min_completion_ms"]) / 1000.0, 0.0))
+        proof = client.post(
+            f"{api_base}/auth/human-check/verify",
+            json={"challenge_token": challenge_payload["challenge_token"]},
+        )
+        proof.raise_for_status()
+        proof_token = proof.json()["proof_token"]
+
         auth_payload = {
             "username": username,
             "email": f"{username}@example.com",
             "password": "SmokeTest123!",
+            "human_check_proof": proof_token,
         }
         response = client.post(f"{api_base}/auth/register", json=auth_payload)
         response.raise_for_status()

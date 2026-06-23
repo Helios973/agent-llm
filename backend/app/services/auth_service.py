@@ -20,6 +20,7 @@ from backend.app.models import User
 PASSWORD_SCHEME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 210_000
 TOKEN_PREFIX = "v1"
+_fallback_auth_secret_key = secrets.token_bytes(32)
 
 
 def _b64encode(value: bytes) -> str:
@@ -32,7 +33,10 @@ def _b64decode(value: str) -> bytes:
 
 
 def _secret_key() -> bytes:
-    return settings.auth_secret_key.encode("utf-8")
+    configured = settings.resolved_auth_secret_key
+    if configured is not None:
+        return configured.encode("utf-8")
+    return _fallback_auth_secret_key
 
 
 def hash_password(password: str) -> str:

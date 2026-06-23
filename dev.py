@@ -356,11 +356,13 @@ def start(args: argparse.Namespace) -> None:
     frontend = start_process(
         [
             str(python),
-            "-m",
-            "http.server",
+            str(ROOT / "scripts" / "dev_static_server.py"),
+            "--port",
             str(config["frontend_port"]),
-            "--bind",
+            "--host",
             str(config["frontend_host"]),
+            "--root",
+            str(FRONTEND_ROOT),
         ],
         FRONTEND_ROOT,
         FRONTEND_OUT,

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import shutil
+import stat
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, is_zipfile
 
 from fastapi import UploadFile
 
@@ -26,6 +28,70 @@ def _normalized_relative_path(filename: str | None) -> Path:
     if not safe_parts:
         return Path("upload.bin")
     return Path(*safe_parts)
+
+
+def _archive_member_destination(project_dir: Path, member_name: str) -> Path:
+    normalized_name = (member_name or "").replace("\\", "/")
+    normalized_path = PurePosixPath(normalized_name)
+    if not normalized_path.parts:
+        raise ValueError("Archive contains an empty path entry")
+    if normalized_path.is_absolute() or normalized_name.startswith("/"):
+        raise ValueError("Archive contains an absolute path entry")
+    if normalized_path.parts[0].endswith(":"):
+        raise ValueError("Archive contains a drive-qualified path entry")
+    if any(part in {"", ".", ".."} for part in normalized_path.parts):
+        raise ValueError("Archive contains a path traversal entry")
+
+    project_root = project_dir.resolve()
+    destination = (project_root / Path(*normalized_path.parts)).resolve()
+    if destination != project_root and project_root not in destination.parents:
+        raise ValueError("Archive extraction escaped the project directory")
+    return destination
+
+
+def _extract_zip_archive(upload_path: Path, project_dir: Path) -> None:
+    with ZipFile(upload_path) as archive:
+        for info in archive.infolist():
+            destination = _archive_member_destination(project_dir, info.filename)
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode == stat.S_IFLNK:
+                raise ValueError("Archive contains an unsupported symbolic link entry")
+            if info.is_dir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, destination.open("wb") as target:
+                shutil.copyfileobj(source, target)
+
+
+def _extract_tar_archive(upload_path: Path, project_dir: Path) -> None:
+    with tarfile.open(upload_path) as archive:
+        for member in archive.getmembers():
+            destination = _archive_member_destination(project_dir, member.name)
+            if member.issym() or member.islnk() or member.isdev():
+                raise ValueError("Archive contains an unsupported special entry")
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+
+            source = archive.extractfile(member)
+            if source is None:
+                continue
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with source, destination.open("wb") as target:
+                shutil.copyfileobj(source, target)
+
+
+def _extract_archive(upload_path: Path, project_dir: Path) -> None:
+    if tarfile.is_tarfile(upload_path):
+        _extract_tar_archive(upload_path, project_dir)
+        return
+    if is_zipfile(upload_path):
+        _extract_zip_archive(upload_path, project_dir)
+        return
+    raise ValueError("Unsupported archive format")
 
 
 async def _write_upload(upload: UploadFile, target_path: Path) -> None:
@@ -103,7 +169,7 @@ def extract_project(task_id: str, upload_path: Path) -> Path:
 
     lowered_name = upload_path.name.lower()
     if lowered_name.endswith(ARCHIVE_SUFFIXES):
-        shutil.unpack_archive(str(upload_path), str(project_dir))
+        _extract_archive(upload_path, project_dir)
         return project_dir
 
     shutil.copy2(upload_path, project_dir / upload_path.name)

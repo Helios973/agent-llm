@@ -62,11 +62,10 @@ def _ensure_auth_columns() -> None:
 
 
 def _ensure_bootstrap_admin() -> None:
-    username = settings.admin_bootstrap_username.strip()
-    email = settings.admin_bootstrap_email.strip().lower()
-    password = settings.admin_bootstrap_password
-    if not username or not email or not password:
+    credentials = settings.bootstrap_admin_credentials
+    if credentials is None:
         return
+    username, email, password = credentials
 
     from backend.app.models import User
     from backend.app.services.auth_service import get_user_by_identifier, hash_password

@@ -7,6 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+INSECURE_AUTH_SECRET_KEYS = frozenset({"change-me-local-auth-secret"})
+INSECURE_BOOTSTRAP_PASSWORDS = frozenset({"Admin123456!"})
 
 
 class Settings(BaseSettings):
@@ -28,12 +30,15 @@ class Settings(BaseSettings):
     frontend_port: int = 3000
     frontend_public_url: str | None = None
     frontend_api_base_url: str | None = None
-    auth_secret_key: str = "change-me-local-auth-secret"
+    auth_secret_key: str | None = None
     auth_token_ttl_seconds: int = 604800
-    admin_bootstrap_username: str = "admin"
-    admin_bootstrap_email: str = "admin@example.com"
-    admin_bootstrap_password: str = "Admin123456!"
+    admin_bootstrap_username: str | None = None
+    admin_bootstrap_email: str | None = None
+    admin_bootstrap_password: str | None = None
     admin_bootstrap_reset_password: bool = False
+    human_check_challenge_ttl_seconds: int = 300
+    human_check_proof_ttl_seconds: int = 300
+    human_check_min_completion_ms: int = 1200
     database_url: str = "sqlite:///./backend/data/auditpilot.db"
     redis_url: str = "redis://127.0.0.1:6379/0"
     sql_echo: bool = False
@@ -66,6 +71,24 @@ class Settings(BaseSettings):
         if self.frontend_public_url:
             return self.frontend_public_url.rstrip("/")
         return f"{self.frontend_scheme}://{self.frontend_host}:{self.frontend_port}"
+
+    @property
+    def resolved_auth_secret_key(self) -> str | None:
+        candidate = (self.auth_secret_key or "").strip()
+        if not candidate or candidate in INSECURE_AUTH_SECRET_KEYS:
+            return None
+        return candidate
+
+    @property
+    def bootstrap_admin_credentials(self) -> tuple[str, str, str] | None:
+        username = (self.admin_bootstrap_username or "").strip()
+        email = (self.admin_bootstrap_email or "").strip().lower()
+        password = self.admin_bootstrap_password or ""
+        if not username or not email or not password:
+            return None
+        if password in INSECURE_BOOTSTRAP_PASSWORDS:
+            return None
+        return username, email, password
 
     @property
     def resolved_cors_origins(self) -> list[str]:

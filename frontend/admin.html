@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AuditPilot Admin</title>
-    <link rel="stylesheet" href="./assets/styles.css" />
+    <title>AuditPilot // Admin Matrix</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=dev-20260616-1" />
   </head>
   <body>
     <div class="admin-shell">
@@ -13,7 +13,7 @@
           <div class="brand-mark">AP</div>
           <div>
             <strong>用户管理</strong>
-            <p>管理员可以控制账号状态并审计普通用户任务</p>
+            <p>管理员可在此控制账号状态并审计普通用户任务</p>
           </div>
         </div>
         <div class="admin-header-actions">
@@ -42,7 +42,10 @@
         </section>
 
         <section class="panel admin-detail-panel">
-          <h2>审计结果</h2>
+          <div class="panel-header">
+            <h2>审计结果</h2>
+            <span class="chip">Admin View</span>
+          </div>
           <div id="adminTaskDetail" class="empty">选择任务后查看漏洞详情。</div>
         </section>
       </main>
@@ -61,7 +64,7 @@
       </section>
     </div>
 
-    <script src="./assets/runtime-config.js"></script>
-    <script src="./assets/admin.js"></script>
+    <script src="./assets/runtime-config.js?v=dev-20260616-1"></script>
+    <script src="./assets/admin.js?v=dev-20260616-1"></script>
   </body>
 </html>

@@ -6,7 +6,7 @@ AuditPilot is a local code security audit prototype built with FastAPI, a static
 
 - User registration and login
 - Normal user and administrator roles
-- Bootstrap administrator account from `.env`
+- Optional bootstrap administrator account from `.env`
 - Multi-file and directory upload
 - Static and LLM-assisted review flow
 - Optional Java audit skill integration from `RuoJi6/java-audit-skills`
@@ -60,16 +60,21 @@ BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8000
 FRONTEND_HOST=127.0.0.1
 FRONTEND_PORT=3000
-AUTH_SECRET_KEY=change-me-local-auth-secret
-ADMIN_BOOTSTRAP_USERNAME=admin
-ADMIN_BOOTSTRAP_EMAIL=admin@example.com
-ADMIN_BOOTSTRAP_PASSWORD=Admin123456!
+AUTH_SECRET_KEY=
+ADMIN_BOOTSTRAP_USERNAME=
+ADMIN_BOOTSTRAP_EMAIL=
+ADMIN_BOOTSTRAP_PASSWORD=
 ADMIN_BOOTSTRAP_RESET_PASSWORD=false
+HUMAN_CHECK_CHALLENGE_TTL_SECONDS=300
+HUMAN_CHECK_PROOF_TTL_SECONDS=300
+HUMAN_CHECK_MIN_COMPLETION_MS=1200
 JAVA_AUDIT_SKILLS_ENABLED=true
 JAVA_AUDIT_SKILLS_ROOT=
 ```
 
-The bootstrap admin is ensured on startup. Existing admin passwords are not overwritten unless `ADMIN_BOOTSTRAP_RESET_PASSWORD=true`.
+Set `AUTH_SECRET_KEY` explicitly if you want stable tokens across restarts. When it is empty, the backend falls back to a per-process secret so placeholder values cannot be abused.
+Bootstrap admin creation is disabled by default and only runs when `ADMIN_BOOTSTRAP_USERNAME`, `ADMIN_BOOTSTRAP_EMAIL`, and a non-placeholder `ADMIN_BOOTSTRAP_PASSWORD` are all configured. Existing admin passwords are not overwritten unless `ADMIN_BOOTSTRAP_RESET_PASSWORD=true`.
+The registration slider now requires a backend-issued, single-use proof token before account creation. This closes the old direct-API bypass for the frontend-only check, but an internet-facing deployment should still consider a managed bot-defense service such as Cloudflare Turnstile or hCaptcha.
 If `JAVA_AUDIT_SKILLS_ROOT` is empty, the backend defaults to `~/.codex/skills` and will automatically append installed Java audit skill guidance for Java projects.
 For Java projects, you can enable full-file review context and stricter heuristic corroboration to cut down false positives in uploaded code.
 

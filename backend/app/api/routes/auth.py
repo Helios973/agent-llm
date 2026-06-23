@@ -6,7 +6,15 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.models import User
-from backend.app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, UserPublic
+from backend.app.schemas.auth import (
+    AuthResponse,
+    HumanCheckChallengeResponse,
+    HumanCheckVerifyRequest,
+    HumanCheckVerifyResponse,
+    LoginRequest,
+    RegisterRequest,
+    UserPublic,
+)
 from backend.app.services.auth_service import (
     authenticate_user,
     create_access_token,
@@ -14,13 +22,35 @@ from backend.app.services.auth_service import (
     get_current_user,
     username_or_email_exists,
 )
+from backend.app.services.human_check import (
+    consume_human_check_proof,
+    issue_human_check_challenge,
+    verify_human_check_challenge,
+)
 
 
 router = APIRouter(prefix="/auth")
 
 
+@router.post("/human-check/challenge", response_model=HumanCheckChallengeResponse)
+def create_human_check_challenge() -> HumanCheckChallengeResponse:
+    challenge = issue_human_check_challenge()
+    return HumanCheckChallengeResponse(
+        challenge_token=challenge.challenge_token,
+        expires_at=challenge.expires_at,
+        min_completion_ms=challenge.min_completion_ms,
+    )
+
+
+@router.post("/human-check/verify", response_model=HumanCheckVerifyResponse)
+def verify_human_check(payload: HumanCheckVerifyRequest) -> HumanCheckVerifyResponse:
+    proof = verify_human_check_challenge(payload.challenge_token)
+    return HumanCheckVerifyResponse(proof_token=proof.proof_token, expires_at=proof.expires_at)
+
+
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+    consume_human_check_proof(payload.human_check_proof)
     if username_or_email_exists(db, payload.username, payload.email):
         raise HTTPException(status_code=409, detail="Username or email already exists")
 

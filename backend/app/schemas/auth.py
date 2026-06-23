@@ -20,6 +20,7 @@ class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     email: str = Field(min_length=3, max_length=255)
     password: str = Field(min_length=8, max_length=128)
+    human_check_proof: str = Field(min_length=1, max_length=2048)
 
     @field_validator("username")
     @classmethod
@@ -49,6 +50,21 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserPublic
+
+
+class HumanCheckChallengeResponse(BaseModel):
+    challenge_token: str
+    expires_at: int
+    min_completion_ms: int
+
+
+class HumanCheckVerifyRequest(BaseModel):
+    challenge_token: str = Field(min_length=1, max_length=2048)
+
+
+class HumanCheckVerifyResponse(BaseModel):
+    proof_token: str
+    expires_at: int
 
 
 class AdminUserSummary(UserPublic):

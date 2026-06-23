@@ -1,5 +1,15 @@
 const runtimeConfig = window.AUDITPILOT_CONFIG || {};
 const AUTH_TOKEN_STORAGE_KEY = "auditpilot.accessToken";
+const REGISTER_SLIDER_TEXT = {
+  idle: "\u8bf7\u62d6\u52a8\u6ed1\u5757\u5b8c\u6210\u4eba\u673a\u9a8c\u8bc1",
+  active: "\u7ee7\u7eed\u62d6\u52a8\u5230\u6700\u53f3\u4fa7",
+  verifying: "\u6b63\u5728\u63d0\u4ea4\u540e\u7aef\u9a8c\u8bc1",
+  failed: "\u9a8c\u8bc1\u672a\u5b8c\u6210\uff0c\u8bf7\u91cd\u8bd5",
+  success: "\u9a8c\u8bc1\u901a\u8fc7\uff0c\u53ef\u4ee5\u521b\u5efa\u8d26\u53f7",
+  hint: "\u6ce8\u518c\u524d\u9700\u5148\u901a\u8fc7\u6ed1\u52a8\u9a8c\u8bc1",
+  reset: "\u5df2\u91cd\u7f6e\u6ed1\u5757\uff0c\u8bf7\u91cd\u65b0\u9a8c\u8bc1",
+};
+const REGISTER_SLIDER_KEYBOARD_STEP = 12;
 
 function normalizeBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
@@ -69,6 +79,18 @@ const OWASP_TOP10 = [
 ];
 
 const state = {
+  registerSlider: {
+    challengeToken: "",
+    dragging: false,
+    offset: 0,
+    pointerId: null,
+    proofToken: "",
+    startOffset: 0,
+    startX: 0,
+    status: "idle",
+    verified: false,
+    verifying: false,
+  },
   taskId: null,
   taskStatus: "未开始",
   progress: 0,
@@ -92,6 +114,13 @@ const elements = {
   registerUsernameInput: document.getElementById("registerUsernameInput"),
   registerEmailInput: document.getElementById("registerEmailInput"),
   registerPasswordInput: document.getElementById("registerPasswordInput"),
+  registerSliderCaptcha: document.getElementById("registerSliderCaptcha"),
+  registerSliderTrack: document.getElementById("registerSliderTrack"),
+  registerSliderFill: document.getElementById("registerSliderFill"),
+  registerSliderLabel: document.getElementById("registerSliderLabel"),
+  registerSliderThumb: document.getElementById("registerSliderThumb"),
+  registerVerifyHint: document.getElementById("registerVerifyHint"),
+  registerVerifyResetBtn: document.getElementById("registerVerifyResetBtn"),
   registerSubmitBtn: document.getElementById("registerSubmitBtn"),
   authMessage: document.getElementById("authMessage"),
   currentUsernameLabel: document.getElementById("currentUsernameLabel"),
@@ -171,12 +200,315 @@ function setAuthMessage(message, level = "error") {
   elements.authMessage.className = `auth-message ${level}`;
 }
 
+function setRegisterSubmitState(isSubmitting = false) {
+  if (!elements.registerSubmitBtn) {
+    return;
+  }
+  elements.registerSubmitBtn.disabled = (
+    isSubmitting
+    || state.registerSlider.verifying
+    || !state.registerSlider.verified
+    || !state.registerSlider.proofToken
+  );
+}
+
+function getRegisterSliderMaxOffset() {
+  const trackWidth = elements.registerSliderTrack?.clientWidth || 0;
+  const thumbWidth = elements.registerSliderThumb?.offsetWidth || 0;
+  return Math.max(trackWidth - thumbWidth - 10, 0);
+}
+
+function releaseRegisterSliderPointer() {
+  const thumb = elements.registerSliderThumb;
+  if (!thumb || state.registerSlider.pointerId === null) {
+    return;
+  }
+
+  try {
+    thumb.releasePointerCapture(state.registerSlider.pointerId);
+  } catch (error) {
+    // Pointer capture can already be released when the gesture ends naturally.
+  }
+}
+
+async function fetchRegisterHumanCheckChallenge(force = false) {
+  if (state.registerSlider.challengeToken && !force) {
+    return true;
+  }
+
+  const base = requireApiBase("human-check");
+  if (!base) {
+    return false;
+  }
+
+  try {
+    const payload = await fetchJson(`${base}/auth/human-check/challenge`, {
+      method: "POST",
+      auth: false,
+    });
+    state.registerSlider.challengeToken = payload.challenge_token;
+    state.registerSlider.proofToken = "";
+    return true;
+  } catch (error) {
+    state.registerSlider.challengeToken = "";
+    state.registerSlider.proofToken = "";
+    setAuthMessage(error.message);
+    return false;
+  }
+}
+
+function renderRegisterSlider() {
+  const captcha = elements.registerSliderCaptcha;
+  const track = elements.registerSliderTrack;
+  const fill = elements.registerSliderFill;
+  const label = elements.registerSliderLabel;
+  const thumb = elements.registerSliderThumb;
+  const hint = elements.registerVerifyHint;
+  if (!captcha || !track || !fill || !label || !thumb || !hint) {
+    return;
+  }
+
+  const maxOffset = getRegisterSliderMaxOffset();
+  if (state.registerSlider.verified) {
+    state.registerSlider.offset = maxOffset;
+    state.registerSlider.status = "verified";
+  } else {
+    state.registerSlider.offset = Math.min(Math.max(state.registerSlider.offset, 0), maxOffset);
+  }
+
+  const fillWidth = Math.min(track.clientWidth, state.registerSlider.offset + thumb.offsetWidth + 5);
+  const progress = maxOffset > 0 ? Math.round((state.registerSlider.offset / maxOffset) * 100) : 0;
+
+  captcha.dataset.status = state.registerSlider.status;
+  fill.style.width = `${fillWidth}px`;
+  thumb.style.transform = `translateX(${state.registerSlider.offset}px)`;
+  thumb.classList.toggle("is-dragging", state.registerSlider.dragging);
+  thumb.setAttribute("aria-valuenow", String(progress));
+  thumb.setAttribute(
+    "aria-valuetext",
+    state.registerSlider.verified ? REGISTER_SLIDER_TEXT.success : `${progress}%`,
+  );
+
+  if (state.registerSlider.verifying) {
+    label.textContent = REGISTER_SLIDER_TEXT.verifying;
+    hint.textContent = REGISTER_SLIDER_TEXT.verifying;
+  } else if (state.registerSlider.status === "verified") {
+    label.textContent = REGISTER_SLIDER_TEXT.success;
+    hint.textContent = REGISTER_SLIDER_TEXT.success;
+  } else if (state.registerSlider.status === "failed") {
+    label.textContent = REGISTER_SLIDER_TEXT.failed;
+    hint.textContent = REGISTER_SLIDER_TEXT.reset;
+  } else if (state.registerSlider.status === "active") {
+    label.textContent = REGISTER_SLIDER_TEXT.active;
+    hint.textContent = REGISTER_SLIDER_TEXT.hint;
+  } else {
+    label.textContent = REGISTER_SLIDER_TEXT.idle;
+    hint.textContent = REGISTER_SLIDER_TEXT.hint;
+  }
+
+  setRegisterSubmitState(false);
+}
+
+function resetRegisterSlider(status = "idle") {
+  releaseRegisterSliderPointer();
+  state.registerSlider.challengeToken = "";
+  state.registerSlider.dragging = false;
+  state.registerSlider.offset = 0;
+  state.registerSlider.pointerId = null;
+  state.registerSlider.proofToken = "";
+  state.registerSlider.startOffset = 0;
+  state.registerSlider.startX = 0;
+  state.registerSlider.status = status;
+  state.registerSlider.verified = false;
+  state.registerSlider.verifying = false;
+  renderRegisterSlider();
+}
+
+async function completeRegisterSlider() {
+  const base = requireApiBase("human-check");
+  if (!base) {
+    resetRegisterSlider("failed");
+    return;
+  }
+  const challengeReady = await fetchRegisterHumanCheckChallenge();
+  if (!challengeReady || !state.registerSlider.challengeToken) {
+    resetRegisterSlider("failed");
+    return;
+  }
+
+  state.registerSlider.dragging = false;
+  state.registerSlider.pointerId = null;
+  state.registerSlider.startOffset = 0;
+  state.registerSlider.startX = 0;
+  state.registerSlider.status = "active";
+  state.registerSlider.verifying = true;
+  renderRegisterSlider();
+
+  try {
+    const payload = await fetchJson(`${base}/auth/human-check/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        challenge_token: state.registerSlider.challengeToken,
+      }),
+      auth: false,
+    });
+    state.registerSlider.proofToken = payload.proof_token;
+    state.registerSlider.status = "verified";
+    state.registerSlider.verified = true;
+    state.registerSlider.offset = getRegisterSliderMaxOffset();
+  } catch (error) {
+    state.registerSlider.challengeToken = "";
+    state.registerSlider.proofToken = "";
+    state.registerSlider.status = "failed";
+    state.registerSlider.verified = false;
+    state.registerSlider.offset = 0;
+    setAuthMessage(error.message);
+    await fetchRegisterHumanCheckChallenge(true);
+  } finally {
+    state.registerSlider.verifying = false;
+    renderRegisterSlider();
+  }
+}
+
+function syncRegisterSliderLayout() {
+  if (state.registerSlider.verified) {
+    state.registerSlider.offset = getRegisterSliderMaxOffset();
+  }
+  renderRegisterSlider();
+}
+
+function handleRegisterSliderPointerDown(event) {
+  if (state.registerSlider.verified || state.registerSlider.verifying) {
+    return;
+  }
+  if (typeof event.button === "number" && event.button !== 0) {
+    return;
+  }
+  if (!state.registerSlider.challengeToken) {
+    setAuthMessage("\u6b63\u5728\u51c6\u5907\u4eba\u673a\u9a8c\u8bc1\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5");
+    void fetchRegisterHumanCheckChallenge(true);
+    event.preventDefault();
+    return;
+  }
+
+  state.registerSlider.dragging = true;
+  state.registerSlider.pointerId = event.pointerId;
+  state.registerSlider.startOffset = state.registerSlider.offset;
+  state.registerSlider.startX = event.clientX;
+  state.registerSlider.status = "active";
+  elements.registerSliderThumb?.setPointerCapture?.(event.pointerId);
+  renderRegisterSlider();
+  event.preventDefault();
+}
+
+function handleRegisterSliderPointerMove(event) {
+  if (!state.registerSlider.dragging || state.registerSlider.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const delta = event.clientX - state.registerSlider.startX;
+  state.registerSlider.offset = state.registerSlider.startOffset + delta;
+  renderRegisterSlider();
+}
+
+async function finishRegisterSliderGesture() {
+  const successThreshold = Math.max(getRegisterSliderMaxOffset() - 6, 0);
+  if (state.registerSlider.offset >= successThreshold) {
+    await completeRegisterSlider();
+    return;
+  }
+  resetRegisterSlider("failed");
+  await fetchRegisterHumanCheckChallenge(true);
+}
+
+function handleRegisterSliderPointerUp(event) {
+  if (state.registerSlider.pointerId !== event.pointerId) {
+    return;
+  }
+
+  releaseRegisterSliderPointer();
+  void finishRegisterSliderGesture();
+}
+
+function handleRegisterSliderPointerCancel(event) {
+  if (state.registerSlider.pointerId !== event.pointerId) {
+    return;
+  }
+
+  releaseRegisterSliderPointer();
+  resetRegisterSlider("idle");
+}
+
+function handleRegisterSliderKeyDown(event) {
+  if (state.registerSlider.verified && !["Home", "Escape"].includes(event.key)) {
+    return;
+  }
+  if (!state.registerSlider.challengeToken && !["Home", "Escape"].includes(event.key)) {
+    setAuthMessage("\u6b63\u5728\u51c6\u5907\u4eba\u673a\u9a8c\u8bc1\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5");
+    void fetchRegisterHumanCheckChallenge(true);
+    event.preventDefault();
+    return;
+  }
+
+  const maxOffset = getRegisterSliderMaxOffset();
+  if (event.key === "End") {
+    event.preventDefault();
+    void completeRegisterSlider();
+    return;
+  }
+  if (event.key === "Home" || event.key === "Escape") {
+    event.preventDefault();
+    resetRegisterSlider("idle");
+    void fetchRegisterHumanCheckChallenge(true);
+    return;
+  }
+  if (!["ArrowRight", "ArrowUp", "ArrowLeft", "ArrowDown"].includes(event.key)) {
+    return;
+  }
+
+  event.preventDefault();
+  state.registerSlider.status = "active";
+  if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+    state.registerSlider.offset = Math.min(
+      state.registerSlider.offset + REGISTER_SLIDER_KEYBOARD_STEP,
+      maxOffset,
+    );
+  } else {
+    state.registerSlider.offset = Math.max(
+      state.registerSlider.offset - REGISTER_SLIDER_KEYBOARD_STEP,
+      0,
+    );
+  }
+
+  if (state.registerSlider.offset >= Math.max(maxOffset - 1, 0) && maxOffset > 0) {
+    void completeRegisterSlider();
+    return;
+  }
+
+  renderRegisterSlider();
+}
+
+function handleRegisterFormInput() {
+  if (state.registerSlider.dragging || state.registerSlider.verifying) {
+    return;
+  }
+  if (state.registerSlider.verified) {
+    resetRegisterSlider("idle");
+    void fetchRegisterHumanCheckChallenge(true);
+  }
+}
+
 function setAuthMode(mode) {
   const isLogin = mode === "login";
   elements.loginForm.hidden = !isLogin;
   elements.registerForm.hidden = isLogin;
   elements.loginTabBtn.classList.toggle("active", isLogin);
   elements.registerTabBtn.classList.toggle("active", !isLogin);
+  resetRegisterSlider();
+  if (!isLogin) {
+    void fetchRegisterHumanCheckChallenge(true);
+  }
   setAuthMessage("");
 }
 
@@ -207,6 +539,8 @@ function showAuth(message = "") {
   closeSocket();
   elements.appShell.hidden = true;
   elements.authScreen.hidden = false;
+  resetRegisterSlider();
+  void fetchRegisterHumanCheckChallenge(true);
   if (message) {
     setAuthMessage(message);
   } else {
@@ -239,6 +573,12 @@ function appendLog(message) {
   elements.logBox.scrollTop = elements.logBox.scrollHeight;
 }
 
+function setText(element, value) {
+  if (element) {
+    element.textContent = value;
+  }
+}
+
 function selectedUploadName(file) {
   return file.webkitRelativePath || file.name || "unnamed";
 }
@@ -255,25 +595,27 @@ function updateUploadSelectionText() {
   const folderFiles = Array.from(elements.folderInput.files || []);
 
   if (!files.length && !folderFiles.length) {
-    elements.uploadSelectionText.textContent = "未选择文件或目录";
+    setText(elements.uploadSelectionText, "未选择文件或目录");
     return;
   }
 
   if (folderFiles.length && !files.length) {
     const rootName = folderFiles[0].webkitRelativePath?.split("/")[0] || "目录";
-    elements.uploadSelectionText.textContent = `已选择目录 ${rootName}，共 ${folderFiles.length} 个文件`;
+    setText(elements.uploadSelectionText, `已选择目录 ${rootName}，共 ${folderFiles.length} 个文件`);
     return;
   }
 
   if (files.length && !folderFiles.length) {
-    elements.uploadSelectionText.textContent =
+    setText(
+      elements.uploadSelectionText,
       files.length === 1
         ? `已选择文件 ${selectedUploadName(files[0])}`
-        : `已选择 ${files.length} 个文件`;
+        : `已选择 ${files.length} 个文件`,
+    );
     return;
   }
 
-  elements.uploadSelectionText.textContent = `已选择 ${files.length} 个文件和 ${folderFiles.length} 个目录文件`;
+  setText(elements.uploadSelectionText, `已选择 ${files.length} 个文件和 ${folderFiles.length} 个目录文件`);
 }
 
 function clearUploadSelection() {
@@ -283,6 +625,9 @@ function clearUploadSelection() {
 }
 
 function setBadge(element, text, level) {
+  if (!element) {
+    return;
+  }
   element.textContent = text;
   element.className = `badge ${level}`;
 }
@@ -324,10 +669,10 @@ function updateRiskStats(findings) {
       counters[key] += 1;
     }
   }
-  elements.highCount.textContent = counters.HIGH + counters.CRITICAL;
-  elements.mediumCount.textContent = counters.MEDIUM;
-  elements.lowCount.textContent = counters.LOW;
-  elements.totalCount.textContent = findings.length;
+  setText(elements.highCount, String(counters.HIGH + counters.CRITICAL));
+  setText(elements.mediumCount, String(counters.MEDIUM));
+  setText(elements.lowCount, String(counters.LOW));
+  setText(elements.totalCount, String(findings.length));
 }
 
 function renderFindings(findings) {
@@ -487,17 +832,27 @@ async function refreshHealth() {
     return;
   }
 
+  const originalLabel = elements.refreshHealthBtn?.textContent || "刷新系统状态";
   try {
+    if (elements.refreshHealthBtn) {
+      elements.refreshHealthBtn.disabled = true;
+      elements.refreshHealthBtn.textContent = "检测中...";
+    }
     const data = await fetchJson(`${base}/health`);
     setBadge(elements.backendHealth, data.app, "ok");
     setBadge(elements.databaseHealth, data.database, data.database === "ok" ? "ok" : "error");
     setBadge(elements.redisHealth, data.redis, data.redis === "ok" ? "ok" : "error");
-    appendLog("[health] 后端连接正常");
+    appendLog(`[health] 系统状态已刷新：backend=${data.app}, db=${data.database}, redis=${data.redis}`);
   } catch (error) {
     setBadge(elements.backendHealth, "连接失败", "error");
     setBadge(elements.databaseHealth, "未知", "warn");
     setBadge(elements.redisHealth, "未知", "warn");
     appendLog(`[health] ${error.message}`);
+  } finally {
+    if (elements.refreshHealthBtn) {
+      elements.refreshHealthBtn.disabled = false;
+      elements.refreshHealthBtn.textContent = originalLabel;
+    }
   }
 }
 
@@ -553,13 +908,20 @@ async function submitLogin(event) {
 
 async function submitRegister(event) {
   event.preventDefault();
+  if (!state.registerSlider.verified || !state.registerSlider.proofToken) {
+    setAuthMessage("\u8bf7\u5148\u5b8c\u6210\u6ed1\u52a8\u9a8c\u8bc1");
+    resetRegisterSlider("failed");
+    await fetchRegisterHumanCheckChallenge(true);
+    return;
+  }
+
   const base = requireApiBase("auth");
   if (!base) {
     return;
   }
 
   try {
-    elements.registerSubmitBtn.disabled = true;
+    setRegisterSubmitState(true);
     setAuthMessage("");
     const payload = await fetchJson(`${base}/auth/register`, {
       method: "POST",
@@ -568,16 +930,20 @@ async function submitRegister(event) {
         username: elements.registerUsernameInput.value.trim(),
         email: elements.registerEmailInput.value.trim(),
         password: elements.registerPasswordInput.value,
+        human_check_proof: state.registerSlider.proofToken,
       }),
       auth: false,
     });
     setSession(payload);
     elements.registerPasswordInput.value = "";
+    resetRegisterSlider();
     showApp();
   } catch (error) {
     setAuthMessage(error.message);
+    resetRegisterSlider("idle");
+    await fetchRegisterHumanCheckChallenge(true);
   } finally {
-    elements.registerSubmitBtn.disabled = false;
+    setRegisterSubmitState(false);
   }
 }
 
@@ -774,26 +1140,40 @@ function openDocs() {
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
-elements.loginTabBtn.addEventListener("click", () => setAuthMode("login"));
-elements.registerTabBtn.addEventListener("click", () => setAuthMode("register"));
-elements.loginForm.addEventListener("submit", submitLogin);
-elements.registerForm.addEventListener("submit", submitRegister);
-elements.logoutBtn.addEventListener("click", logout);
-elements.pickFolderBtn.addEventListener("click", () => elements.folderInput.click());
-elements.fileInput.addEventListener("change", updateUploadSelectionText);
-elements.folderInput.addEventListener("change", updateUploadSelectionText);
-elements.uploadBtn.addEventListener("click", uploadFile);
-elements.demoBtn.addEventListener("click", uploadDemoProject);
-elements.startBtn.addEventListener("click", startAudit);
-elements.docsBtn.addEventListener("click", openDocs);
-elements.refreshHealthBtn.addEventListener("click", refreshHealth);
+elements.loginTabBtn?.addEventListener("click", () => setAuthMode("login"));
+elements.registerTabBtn?.addEventListener("click", () => setAuthMode("register"));
+elements.loginForm?.addEventListener("submit", submitLogin);
+elements.registerForm?.addEventListener("submit", submitRegister);
+elements.registerVerifyResetBtn?.addEventListener("click", () => {
+  resetRegisterSlider("idle");
+  void fetchRegisterHumanCheckChallenge(true);
+});
+elements.registerSliderThumb?.addEventListener("pointerdown", handleRegisterSliderPointerDown);
+elements.registerSliderThumb?.addEventListener("pointermove", handleRegisterSliderPointerMove);
+elements.registerSliderThumb?.addEventListener("pointerup", handleRegisterSliderPointerUp);
+elements.registerSliderThumb?.addEventListener("pointercancel", handleRegisterSliderPointerCancel);
+elements.registerSliderThumb?.addEventListener("keydown", handleRegisterSliderKeyDown);
+elements.registerUsernameInput?.addEventListener("input", handleRegisterFormInput);
+elements.registerEmailInput?.addEventListener("input", handleRegisterFormInput);
+elements.registerPasswordInput?.addEventListener("input", handleRegisterFormInput);
+elements.logoutBtn?.addEventListener("click", logout);
+elements.pickFolderBtn?.addEventListener("click", () => elements.folderInput.click());
+elements.fileInput?.addEventListener("change", updateUploadSelectionText);
+elements.folderInput?.addEventListener("change", updateUploadSelectionText);
+elements.uploadBtn?.addEventListener("click", uploadFile);
+elements.demoBtn?.addEventListener("click", uploadDemoProject);
+elements.startBtn?.addEventListener("click", startAudit);
+elements.docsBtn?.addEventListener("click", openDocs);
+elements.refreshHealthBtn?.addEventListener("click", refreshHealth);
 
 window.addEventListener("beforeunload", () => {
   stopPolling();
   closeSocket();
 });
+window.addEventListener("resize", syncRegisterSliderLayout);
 
 setTaskMeta();
 renderTop10([]);
 updateUploadSelectionText();
+resetRegisterSlider();
 restoreSession();
