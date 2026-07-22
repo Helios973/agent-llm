@@ -1,5 +1,14 @@
+import {
+  AUTH_TOKEN_STORAGE_KEY,
+  appendAccessToken,
+  createJsonClient,
+  escapeHtml,
+  initials,
+  normalizeBaseUrl,
+  normalizePath,
+} from "./core.js";
+
 const runtimeConfig = window.AUDITPILOT_CONFIG || {};
-const AUTH_TOKEN_STORAGE_KEY = "auditpilot.accessToken";
 const REGISTER_SLIDER_TEXT = {
   idle: "\u8bf7\u62d6\u52a8\u6ed1\u5757\u5b8c\u6210\u4eba\u673a\u9a8c\u8bc1",
   active: "\u7ee7\u7eed\u62d6\u52a8\u5230\u6700\u53f3\u4fa7",
@@ -10,16 +19,11 @@ const REGISTER_SLIDER_TEXT = {
   reset: "\u5df2\u91cd\u7f6e\u6ed1\u5757\uff0c\u8bf7\u91cd\u65b0\u9a8c\u8bc1",
 };
 const REGISTER_SLIDER_KEYBOARD_STEP = 12;
-
-function normalizeBaseUrl(value) {
-  return String(value || "").trim().replace(/\/+$/, "");
-}
-
-function normalizePath(value) {
-  const path = String(value || "/api/v1").trim();
-  const withSlash = path.startsWith("/") ? path : `/${path}`;
-  return withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
-}
+const PROVIDER_DEFAULTS = {
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+  deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  "openai-compatible": { baseUrl: "", model: "" },
+};
 
 function configuredApiBase() {
   return normalizeBaseUrl(runtimeConfig.apiBaseUrl);
@@ -98,6 +102,7 @@ const state = {
   pollTimer: null,
   accessToken: window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
   currentUser: null,
+  llmApiKeyConfigured: false,
   logs: ["[system] 等待任务开始..."],
 };
 
@@ -126,8 +131,20 @@ const elements = {
   currentUsernameLabel: document.getElementById("currentUsernameLabel"),
   currentEmailLabel: document.getElementById("currentEmailLabel"),
   currentRoleLabel: document.getElementById("currentRoleLabel"),
+  currentUserAvatar: document.getElementById("currentUserAvatar"),
   adminPageLink: document.getElementById("adminPageLink"),
   logoutBtn: document.getElementById("logoutBtn"),
+  llmConfigForm: document.getElementById("llmConfigForm"),
+  llmProviderSelect: document.getElementById("llmProviderSelect"),
+  llmBaseUrlInput: document.getElementById("llmBaseUrlInput"),
+  llmModelInput: document.getElementById("llmModelInput"),
+  llmModelOptions: document.getElementById("llmModelOptions"),
+  llmApiKeyInput: document.getElementById("llmApiKeyInput"),
+  saveLlmConfigBtn: document.getElementById("saveLlmConfigBtn"),
+  discoverLlmModelsBtn: document.getElementById("discoverLlmModelsBtn"),
+  clearLlmApiKeyBtn: document.getElementById("clearLlmApiKeyBtn"),
+  llmConfigStatus: document.getElementById("llmConfigStatus"),
+  llmConfigMessage: document.getElementById("llmConfigMessage"),
   apiBaseInput: document.getElementById("apiBaseInput"),
   taskNameInput: document.getElementById("taskNameInput"),
   fileInput: document.getElementById("fileInput"),
@@ -505,6 +522,8 @@ function setAuthMode(mode) {
   elements.registerForm.hidden = isLogin;
   elements.loginTabBtn.classList.toggle("active", isLogin);
   elements.registerTabBtn.classList.toggle("active", !isLogin);
+  elements.loginTabBtn.setAttribute("aria-selected", String(isLogin));
+  elements.registerTabBtn.setAttribute("aria-selected", String(!isLogin));
   resetRegisterSlider();
   if (!isLogin) {
     void fetchRegisterHumanCheckChallenge(true);
@@ -530,8 +549,158 @@ function showApp() {
   elements.currentUsernameLabel.textContent = state.currentUser?.username || "-";
   elements.currentEmailLabel.textContent = state.currentUser?.email || "-";
   elements.currentRoleLabel.textContent = state.currentUser?.role === "admin" ? "管理员" : "普通用户";
+  elements.currentUserAvatar.textContent = initials(state.currentUser?.username);
   elements.adminPageLink.hidden = state.currentUser?.role !== "admin";
   refreshHealth();
+  void loadLlmConfig();
+}
+
+function setLlmConfigMessage(message = "", level = "error") {
+  if (!message) {
+    elements.llmConfigMessage.hidden = true;
+    elements.llmConfigMessage.textContent = "";
+    elements.llmConfigMessage.className = "auth-message";
+    return;
+  }
+  elements.llmConfigMessage.hidden = false;
+  elements.llmConfigMessage.textContent = message;
+  elements.llmConfigMessage.className = `auth-message ${level}`;
+}
+
+function setLlmConfigStatus(config) {
+  const configured = Boolean(config?.api_key_configured);
+  state.llmApiKeyConfigured = configured;
+  elements.llmConfigStatus.textContent = configured ? "Key 已配置" : "未配置";
+  elements.llmConfigStatus.className = `badge ${configured ? "ok" : "neutral"}`;
+  elements.clearLlmApiKeyBtn.disabled = !configured;
+}
+
+function renderLlmModelOptions(models) {
+  elements.llmModelOptions.innerHTML = models
+    .map((model) => `<option value="${escapeHtml(model)}"></option>`)
+    .join("");
+}
+
+function applyProviderDefaults({ force = false } = {}) {
+  const defaults = PROVIDER_DEFAULTS[elements.llmProviderSelect.value] || PROVIDER_DEFAULTS["openai-compatible"];
+  if (force || !elements.llmBaseUrlInput.value.trim()) elements.llmBaseUrlInput.value = defaults.baseUrl;
+  if (force || !elements.llmModelInput.value.trim()) elements.llmModelInput.value = defaults.model;
+}
+
+async function loadLlmConfig() {
+  const base = requireApiBase("LLM configuration");
+  if (!base) return;
+  try {
+    const config = await fetchJson(`${base}/auth/llm-config`);
+    elements.llmProviderSelect.value = config.provider || "openai";
+    elements.llmBaseUrlInput.value = config.base_url || "";
+    elements.llmModelInput.value = config.model || "";
+    elements.llmApiKeyInput.value = "";
+    applyProviderDefaults();
+    setLlmConfigStatus(config);
+    setLlmConfigMessage("");
+    if (config.api_key_configured) {
+      await discoverLlmModels();
+    }
+  } catch (error) {
+    setLlmConfigMessage(error.message);
+  }
+}
+
+async function discoverLlmModels({ silent = false } = {}) {
+  const base = requireApiBase("model discovery");
+  if (!base) return [];
+  const baseUrl = elements.llmBaseUrlInput.value.trim();
+  const apiKey = elements.llmApiKeyInput.value.trim();
+  if (!baseUrl) {
+    if (!silent) setLlmConfigMessage("请先填写 API Base URL。");
+    return [];
+  }
+  if (!apiKey && !state.llmApiKeyConfigured) {
+    if (!silent) setLlmConfigMessage("请先填写 API Key。");
+    return [];
+  }
+
+  const originalLabel = elements.discoverLlmModelsBtn.textContent;
+  try {
+    elements.discoverLlmModelsBtn.disabled = true;
+    elements.discoverLlmModelsBtn.textContent = "识别中…";
+    const payload = await fetchJson(`${base}/auth/llm-models/discover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: elements.llmProviderSelect.value,
+        base_url: baseUrl,
+        ...(apiKey ? { api_key: apiKey } : {}),
+      }),
+    });
+    const models = payload.models || [];
+    renderLlmModelOptions(models);
+    if (!elements.llmModelInput.value.trim() && models.length) {
+      elements.llmModelInput.value = models[0];
+    }
+    if (!silent) setLlmConfigMessage(`已识别 ${models.length} 个可用模型，可在模型名称中选择。`, "ok");
+    return models;
+  } catch (error) {
+    renderLlmModelOptions([]);
+    if (!silent) setLlmConfigMessage(`模型识别失败：${error.message}`);
+    return [];
+  } finally {
+    elements.discoverLlmModelsBtn.disabled = false;
+    elements.discoverLlmModelsBtn.textContent = originalLabel;
+  }
+}
+
+async function saveLlmConfig(event) {
+  event.preventDefault();
+  const base = requireApiBase("LLM configuration");
+  if (!base) return;
+  const originalLabel = elements.saveLlmConfigBtn.textContent;
+  try {
+    elements.saveLlmConfigBtn.disabled = true;
+    const apiKey = elements.llmApiKeyInput.value.trim();
+    const config = await fetchJson(`${base}/auth/llm-config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: elements.llmProviderSelect.value,
+        base_url: elements.llmBaseUrlInput.value.trim(),
+        model: elements.llmModelInput.value.trim(),
+        ...(apiKey ? { api_key: apiKey } : {}),
+      }),
+    });
+    elements.llmApiKeyInput.value = "";
+    setLlmConfigStatus(config);
+    const models = await discoverLlmModels({ silent: true });
+    setLlmConfigMessage(`API 配置已保存${models.length ? `，已识别 ${models.length} 个可用模型` : ""}。`, "ok");
+  } catch (error) {
+    setLlmConfigMessage(error.message);
+  } finally {
+    elements.saveLlmConfigBtn.disabled = false;
+    elements.saveLlmConfigBtn.textContent = originalLabel;
+  }
+}
+
+async function clearLlmApiKey() {
+  const base = requireApiBase("LLM configuration");
+  if (!base) return;
+  try {
+    const config = await fetchJson(`${base}/auth/llm-config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: elements.llmProviderSelect.value,
+        base_url: elements.llmBaseUrlInput.value.trim(),
+        model: elements.llmModelInput.value.trim(),
+        clear_api_key: true,
+      }),
+    });
+    setLlmConfigStatus(config);
+    renderLlmModelOptions([]);
+    setLlmConfigMessage("已删除保存的 API Key。", "ok");
+  } catch (error) {
+    setLlmConfigMessage(error.message);
+  }
 }
 
 function showAuth(message = "") {
@@ -549,20 +718,7 @@ function showAuth(message = "") {
 }
 
 function withAccessToken(url) {
-  if (!state.accessToken) {
-    return url;
-  }
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}access_token=${encodeURIComponent(state.accessToken)}`;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return appendAccessToken(url, state.accessToken);
 }
 
 function appendLog(message) {
@@ -637,7 +793,17 @@ function setTaskMeta() {
   elements.taskStatusLabel.textContent = state.taskStatus;
   elements.taskProgressLabel.textContent = `${state.progress}%`;
   elements.progressBar.style.width = `${state.progress}%`;
+  elements.progressBar.parentElement?.setAttribute("aria-valuenow", String(state.progress));
   elements.startBtn.disabled = !state.taskId || state.taskStatus === "running";
+  elements.taskStatusLabel.className = `badge ${
+    state.taskStatus === "completed"
+      ? "ok"
+      : state.taskStatus === "failed"
+        ? "error"
+        : state.taskStatus === "running"
+          ? "warn"
+          : "neutral"
+  }`;
 }
 
 function renderTop10(findings) {
@@ -797,34 +963,13 @@ function closeSocket() {
   }
 }
 
-async function fetchJson(url, options = {}) {
-  const { auth = true, headers, ...rest } = options;
-  const requestHeaders = new Headers(headers || {});
-  if (auth && state.accessToken) {
-    requestHeaders.set("Authorization", `Bearer ${state.accessToken}`);
-  }
-
-  const response = await fetch(url, {
-    ...rest,
-    headers: requestHeaders,
-  });
-  if (response.status === 401 && auth) {
+const fetchJson = createJsonClient({
+  getToken: () => state.accessToken,
+  onUnauthorized: () => {
     clearSession();
     showAuth("登录已过期，请重新登录。");
-  }
-  if (!response.ok) {
-    const fallback = `${response.status} ${response.statusText}`;
-    let detail = fallback;
-    try {
-      const payload = await response.json();
-      detail = payload.detail || JSON.stringify(payload);
-    } catch {
-      detail = (await response.text()) || fallback;
-    }
-    throw new Error(detail);
-  }
-  return response.json();
-}
+  },
+});
 
 async function refreshHealth() {
   const base = requireApiBase("health");
@@ -1086,7 +1231,7 @@ async function loadTaskResult() {
     if (task.status === "completed") {
       renderReports(task.id);
       stopPolling();
-    } else if (task.status === "failed") {
+    } else if (task.status === "failed" || task.status === "stopped") {
       stopPolling();
     }
   } catch (error) {
@@ -1157,6 +1302,15 @@ elements.registerUsernameInput?.addEventListener("input", handleRegisterFormInpu
 elements.registerEmailInput?.addEventListener("input", handleRegisterFormInput);
 elements.registerPasswordInput?.addEventListener("input", handleRegisterFormInput);
 elements.logoutBtn?.addEventListener("click", logout);
+elements.llmConfigForm?.addEventListener("submit", saveLlmConfig);
+elements.llmProviderSelect?.addEventListener("change", () => {
+  applyProviderDefaults({ force: true });
+  void discoverLlmModels({ silent: true });
+});
+elements.llmBaseUrlInput?.addEventListener("change", () => void discoverLlmModels({ silent: true }));
+elements.llmApiKeyInput?.addEventListener("change", () => void discoverLlmModels());
+elements.discoverLlmModelsBtn?.addEventListener("click", () => void discoverLlmModels());
+elements.clearLlmApiKeyBtn?.addEventListener("click", clearLlmApiKey);
 elements.pickFolderBtn?.addEventListener("click", () => elements.folderInput.click());
 elements.fileInput?.addEventListener("change", updateUploadSelectionText);
 elements.folderInput?.addEventListener("change", updateUploadSelectionText);

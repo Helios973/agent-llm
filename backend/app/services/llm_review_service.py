@@ -11,12 +11,14 @@ import httpx
 
 from backend.app.agent.state import AuditFinding
 from backend.app.core.config import settings
+from backend.app.core.database import SessionLocal
 from backend.app.services.code_security_skill import (
     CodeSecuritySkillResources,
     apply_hard_exclusion_filters,
     load_code_security_skill_resources,
 )
 from backend.app.services.java_audit_skill import build_java_audit_prompt_addendum
+from backend.app.services.user_llm_config import LLMConnection, get_user_llm_connection
 
 
 SOURCE_SUFFIXES = {
@@ -187,10 +189,6 @@ class _ContextCandidate:
 
 def _is_java_review(language: str) -> bool:
     return language.lower() == "java"
-
-
-def llm_is_configured() -> bool:
-    return settings.llm_enabled and bool(settings.deepseek_api_key and settings.deepseek_model)
 
 
 def _merge_snippet_windows(line_numbers: list[int], total_lines: int, radius: int = 6) -> list[tuple[int, int]]:
@@ -791,9 +789,14 @@ def _build_user_prompt(
     )
 
 
-def _build_request_payload(system_prompt: str, user_prompt: str, user_identifier: str) -> dict[str, Any]:
+def _build_request_payload(
+    system_prompt: str,
+    user_prompt: str,
+    user_identifier: str,
+    connection: LLMConnection,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "model": settings.deepseek_model,
+        "model": connection.model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -802,10 +805,12 @@ def _build_request_payload(system_prompt: str, user_prompt: str, user_identifier
         "stream": False,
         "temperature": 0.2,
         "max_tokens": settings.llm_max_output_tokens,
-        "reasoning_effort": settings.deepseek_reasoning_effort,
         "user_id": user_identifier,
     }
-    payload["thinking"] = {"type": "enabled" if settings.deepseek_thinking_enabled else "disabled"}
+    # DeepSeek extensions are deliberately not sent to OpenAI-compatible APIs.
+    if connection.provider == "deepseek":
+        payload["reasoning_effort"] = settings.deepseek_reasoning_effort
+        payload["thinking"] = {"type": "enabled" if settings.deepseek_thinking_enabled else "disabled"}
     return payload
 
 
@@ -868,6 +873,7 @@ def _normalize_filter_summary(raw_filter_summary: Any) -> list[dict[str, Any]]:
 def _normalize_findings(
     raw_findings: list[dict[str, Any]],
     filter_summary: list[dict[str, Any]],
+    connection: LLMConnection | None = None,
 ) -> list[AuditFinding]:
     filter_summary_index = {
         (str(item.get("title", "")).strip(), str(item.get("file_path", "")).strip()): item
@@ -922,8 +928,8 @@ def _normalize_findings(
                 "references": references,
                 "metadata": {
                     "analysis_type": "model",
-                    "model": settings.deepseek_model,
-                    "provider": "deepseek",
+                    "model": connection.model if connection else settings.deepseek_model,
+                    "provider": connection.provider if connection else "deepseek",
                     "cross_file": bool(related_files),
                     "review_skill": "code-security-review",
                     "confidence_score": confidence_score,
@@ -950,8 +956,13 @@ async def review_project_with_llm(
     if not settings.llm_enabled:
         return [], "LLM review is disabled"
 
-    if not settings.deepseek_api_key:
-        return [], "DEEPSEEK_API_KEY is not configured"
+    db = SessionLocal()
+    try:
+        connection = get_user_llm_connection(db, user_id)
+    finally:
+        db.close()
+    if connection is None:
+        return [], "No provider API key is configured for this user"
 
     resources = load_code_security_skill_resources()
     filtered_scan_results, excluded_scan_summaries = apply_hard_exclusion_filters(scan_results)
@@ -988,15 +999,15 @@ async def review_project_with_llm(
         excluded_scan_summaries=excluded_scan_summaries,
         java_skill_addendum=java_skill_addendum,
     )
-    payload = _build_request_payload(system_prompt, user_prompt, user_id or task_id)
+    payload = _build_request_payload(system_prompt, user_prompt, user_id or task_id, connection)
 
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
-    base_url = settings.deepseek_base_url.rstrip("/")
+    base_url = connection.base_url.rstrip("/")
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
             f"{base_url}/chat/completions",
             headers={
-                "Authorization": f"Bearer {settings.deepseek_api_key}",
+                "Authorization": f"Bearer {connection.api_key}",
                 "Content-Type": "application/json",
             },
             json=payload,
@@ -1006,15 +1017,15 @@ async def review_project_with_llm(
 
     raw_text = _extract_response_text(body)
     if not raw_text:
-        return [], "DeepSeek returned an empty review payload"
+        return [], f"{connection.provider} returned an empty review payload"
 
     parsed = json.loads(raw_text)
     raw_findings = parsed.get("findings", [])
     if not isinstance(raw_findings, list):
-        return [], "DeepSeek returned an invalid findings payload"
+        return [], f"{connection.provider} returned an invalid findings payload"
 
     filter_summary = _normalize_filter_summary(parsed.get("filter_summary", []))
-    findings = _normalize_findings(raw_findings, filter_summary)
+    findings = _normalize_findings(raw_findings, filter_summary, connection)
     findings, excluded_model_findings = apply_hard_exclusion_filters(findings)
     excluded_summary_count = sum(1 for item in filter_summary if item.get("decision") == "EXCLUDE")
     message_bits = [

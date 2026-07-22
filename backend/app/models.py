@@ -26,6 +26,21 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     tasks: Mapped[list["AuditTask"]] = relationship(back_populates="user")
+    llm_config: Mapped["UserLLMConfig | None"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+
+class UserLLMConfig(Base):
+    __tablename__ = "user_llm_configs"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="llm_config")
 
 
 class AuditTask(Base):

@@ -13,6 +13,10 @@ from backend.app.schemas.auth import (
     HumanCheckVerifyResponse,
     LoginRequest,
     RegisterRequest,
+    UserLLMConfigResponse,
+    UserLLMConfigUpdateRequest,
+    UserLLMModelDiscoverRequest,
+    UserLLMModelDiscoverResponse,
     UserPublic,
 )
 from backend.app.services.auth_service import (
@@ -26,6 +30,11 @@ from backend.app.services.human_check import (
     consume_human_check_proof,
     issue_human_check_challenge,
     verify_human_check_challenge,
+)
+from backend.app.services.user_llm_config import (
+    discover_user_llm_models,
+    serialize_user_llm_config,
+    update_user_llm_config,
 )
 
 
@@ -75,3 +84,44 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 @router.get("/me", response_model=UserPublic)
 def me(current_user: User = Depends(get_current_user)) -> UserPublic:
     return UserPublic.model_validate(current_user)
+
+
+@router.get("/llm-config", response_model=UserLLMConfigResponse)
+def get_llm_config(
+    current_user: User = Depends(get_current_user),
+) -> UserLLMConfigResponse:
+    return UserLLMConfigResponse.model_validate(serialize_user_llm_config(current_user.llm_config))
+
+
+@router.put("/llm-config", response_model=UserLLMConfigResponse)
+def save_llm_config(
+    payload: UserLLMConfigUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> UserLLMConfigResponse:
+    config = update_user_llm_config(
+        db,
+        user_id=current_user.id,
+        provider=payload.provider,
+        base_url=payload.base_url,
+        model=payload.model,
+        api_key=payload.api_key,
+        clear_api_key=payload.clear_api_key,
+    )
+    return UserLLMConfigResponse.model_validate(serialize_user_llm_config(config))
+
+
+@router.post("/llm-models/discover", response_model=UserLLMModelDiscoverResponse)
+async def discover_llm_models(
+    payload: UserLLMModelDiscoverRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> UserLLMModelDiscoverResponse:
+    base_url, models = await discover_user_llm_models(
+        db,
+        user_id=current_user.id,
+        provider=payload.provider,
+        base_url=payload.base_url,
+        api_key=payload.api_key,
+    )
+    return UserLLMModelDiscoverResponse(provider=payload.provider, base_url=base_url, models=models)

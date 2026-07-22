@@ -1,5 +1,12 @@
+import {
+  AUTH_TOKEN_STORAGE_KEY,
+  appendAccessToken,
+  createJsonClient,
+  escapeHtml,
+  normalizeBaseUrl,
+} from "./core.js";
+
 const runtimeConfig = window.AUDITPILOT_CONFIG || {};
-const AUTH_TOKEN_STORAGE_KEY = "auditpilot.accessToken";
 
 const state = {
   accessToken: window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
@@ -22,29 +29,12 @@ const elements = {
   adminTaskDetail: document.getElementById("adminTaskDetail"),
 };
 
-function normalizeBaseUrl(value) {
-  return String(value || "").trim().replace(/\/+$/, "");
-}
-
 function apiBase() {
   return normalizeBaseUrl(runtimeConfig.apiBaseUrl);
 }
 
 function withAccessToken(url) {
-  if (!state.accessToken) {
-    return url;
-  }
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}access_token=${encodeURIComponent(state.accessToken)}`;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return appendAccessToken(url, state.accessToken);
 }
 
 function setMessage(message, level = "error") {
@@ -71,29 +61,7 @@ function showApp() {
   elements.adminIdentity.textContent = `${state.currentUser.username} / 管理员`;
 }
 
-async function fetchJson(url, options = {}) {
-  const { headers, ...rest } = options;
-  const requestHeaders = new Headers(headers || {});
-  if (state.accessToken) {
-    requestHeaders.set("Authorization", `Bearer ${state.accessToken}`);
-  }
-
-  const response = await fetch(url, {
-    ...rest,
-    headers: requestHeaders,
-  });
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = await response.json();
-      detail = payload.detail || JSON.stringify(payload);
-    } catch {
-      detail = (await response.text()) || detail;
-    }
-    throw new Error(detail);
-  }
-  return response.json();
-}
+const fetchJson = createJsonClient({ getToken: () => state.accessToken });
 
 function renderUsers() {
   if (!state.users.length) {
@@ -184,7 +152,14 @@ function renderTasks(tasks, user) {
             <td>
               <div class="table-actions">
                 <button class="ghost" data-action="view-task" data-task-id="${escapeHtml(task.id)}" type="button">查看</button>
-                <button class="secondary" data-action="start-task" data-task-id="${escapeHtml(task.id)}" type="button">审计</button>
+                <button
+                  class="stop-action ${user?.role === "user" && ["queued", "running"].includes(task.status) ? "danger-action" : "stop-action-disabled"}"
+                  data-action="stop-task"
+                  data-task-id="${escapeHtml(task.id)}"
+                  type="button"
+                  ${user?.role === "user" && ["queued", "running"].includes(task.status) ? "" : "disabled"}
+                  title="${user?.role === "user" && ["queued", "running"].includes(task.status) ? "停止当前审计任务" : "当前状态不可停止"}"
+                >停止</button>
               </div>
             </td>
           </tr>
@@ -267,16 +242,15 @@ async function viewTask(taskId) {
   renderTaskDetail(task);
 }
 
-async function startTask(taskId) {
-  await fetchJson(`${apiBase()}/audit/start`, {
+async function stopTask(taskId) {
+  await fetchJson(`${apiBase()}/admin/tasks/${encodeURIComponent(taskId)}/stop`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ task_id: taskId }),
   });
-  await viewTask(taskId);
   if (state.selectedUserId) {
     await loadUserTasks(state.selectedUserId);
   }
+  await viewTask(taskId);
+  setMessage("任务已停止。", "ok");
 }
 
 function logout() {
@@ -337,8 +311,10 @@ elements.tasksTable.addEventListener("click", (event) => {
   if (target.dataset.action === "view-task") {
     viewTask(taskId).catch((error) => setMessage(error.message));
   }
-  if (target.dataset.action === "start-task") {
-    startTask(taskId).catch((error) => setMessage(error.message));
+  if (target.dataset.action === "stop-task") {
+    if (window.confirm("停止这个正在运行的审计任务？")) {
+      stopTask(taskId).catch((error) => setMessage(error.message));
+    }
   }
 });
 

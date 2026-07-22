@@ -39,7 +39,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from backend.app.models import AuditTask, Finding, User  # noqa: F401
+    from backend.app.models import AuditTask, Finding, User, UserLLMConfig  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_auth_columns()

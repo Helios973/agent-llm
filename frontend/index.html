@@ -1,243 +1,199 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AuditPilot // Cyber Console</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=dev-20260616-1" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#03070b" />
+    <title>AuditPilot · 代码安全审计工作台</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=refactor-20260723-models" />
   </head>
   <body>
-    <section id="authScreen" class="auth-screen">
+    <a class="skip-link" href="#mainContent">跳到主要内容</a>
+
+    <section id="authScreen" class="auth-screen" aria-labelledby="authTitle">
+      <div class="auth-visual" aria-hidden="true">
+        <div class="auth-visual-content">
+          <span class="eyebrow">// SECURE_BY_DESIGN</span>
+          <h1>把代码风险，<br />变成可执行的修复。</h1>
+          <p>统一管理源码接入、自动审计、风险归类与报告交付。</p>
+          <div class="auth-feature-list">
+            <span>静态分析</span><span>Agent 审计</span><span>OWASP 映射</span>
+          </div>
+        </div>
+      </div>
+
       <div class="auth-card">
         <div class="brand auth-brand">
-          <div class="brand-mark">AP</div>
+          <div class="brand-mark" aria-hidden="true">&gt;_</div>
           <div>
-            <strong>AuditPilot</strong>
-            <p>登录后进入极客风安全审计控制台</p>
+            <strong id="authTitle">AuditPilot</strong>
+            <p>代码安全审计工作台</p>
           </div>
         </div>
 
-        <div class="auth-tabs">
-          <button id="loginTabBtn" class="auth-tab active" type="button">登录</button>
-          <button id="registerTabBtn" class="auth-tab" type="button">注册</button>
+        <div class="auth-tabs" role="tablist" aria-label="账户操作">
+          <button id="loginTabBtn" class="auth-tab active" type="button" role="tab" aria-selected="true" aria-controls="loginForm">登录</button>
+          <button id="registerTabBtn" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="registerForm">注册</button>
         </div>
 
-        <form id="loginForm" class="auth-form">
+        <form id="loginForm" class="auth-form" aria-label="登录">
           <label class="field">
             <span>用户名或邮箱</span>
-            <input id="loginIdentifierInput" type="text" autocomplete="username" required />
+            <input id="loginIdentifierInput" type="text" autocomplete="username" placeholder="name@example.com" required />
           </label>
           <label class="field">
             <span>密码</span>
-            <input id="loginPasswordInput" type="password" autocomplete="current-password" required />
+            <input id="loginPasswordInput" type="password" autocomplete="current-password" placeholder="请输入密码" required />
           </label>
-          <button id="loginSubmitBtn" class="primary full-width" type="submit">登录</button>
+          <button id="loginSubmitBtn" class="primary full-width" type="submit">进入工作台</button>
         </form>
 
-        <form id="registerForm" class="auth-form" hidden>
+        <form id="registerForm" class="auth-form" aria-label="注册" hidden>
           <label class="field">
             <span>用户名</span>
-            <input id="registerUsernameInput" type="text" autocomplete="username" minlength="3" maxlength="50" required />
+            <input id="registerUsernameInput" type="text" autocomplete="username" minlength="3" maxlength="50" placeholder="3–50 个字符" required />
           </label>
           <label class="field">
             <span>邮箱</span>
-            <input id="registerEmailInput" type="email" autocomplete="email" required />
+            <input id="registerEmailInput" type="email" autocomplete="email" placeholder="name@example.com" required />
           </label>
           <label class="field">
             <span>密码</span>
-            <input id="registerPasswordInput" type="password" autocomplete="new-password" minlength="8" required />
+            <input id="registerPasswordInput" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 个字符" required />
           </label>
           <div class="verify-card" aria-live="polite">
             <div class="verify-card-header">
               <strong>真人校验</strong>
-              <button id="registerVerifyResetBtn" class="ghost verify-reset-btn" type="button">重置</button>
+              <button id="registerVerifyResetBtn" class="text-button verify-reset-btn" type="button">重置</button>
             </div>
             <div id="registerSliderCaptcha" class="slider-captcha" data-status="idle">
               <div id="registerSliderTrack" class="slider-track">
                 <div id="registerSliderFill" class="slider-fill"></div>
-                <span id="registerSliderLabel" class="slider-label">请拖动滑块完成人机验证</span>
-                <button
-                  id="registerSliderThumb"
-                  class="slider-thumb"
-                  type="button"
-                  role="slider"
-                  aria-label="拖动滑块进行真人验证"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow="0"
-                >
-                  <span aria-hidden="true"></span>
-                </button>
+                <span id="registerSliderLabel" class="slider-label">请拖动滑块完成验证</span>
+                <button id="registerSliderThumb" class="slider-thumb" type="button" role="slider" aria-label="拖动滑块进行真人验证" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span aria-hidden="true"></span></button>
               </div>
             </div>
-            <p id="registerVerifyHint" class="helper-text verify-hint">注册前需先通过滑动验证。</p>
+            <p id="registerVerifyHint" class="helper-text verify-hint">注册前需要通过滑动验证。</p>
           </div>
-          <button id="registerSubmitBtn" class="primary full-width" type="submit" disabled>创建账号</button>
+          <button id="registerSubmitBtn" class="primary full-width" type="submit" disabled>创建账户</button>
         </form>
-
-        <div id="authMessage" class="auth-message" hidden></div>
+        <div id="authMessage" class="auth-message" role="status" hidden></div>
       </div>
     </section>
 
     <div id="appShell" class="shell" hidden>
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark">AP</div>
-          <div>
-            <strong>AuditPilot</strong>
-            <p>代码审计 · 任务编排 · 漏洞追踪</p>
-          </div>
+      <aside class="sidebar" aria-label="工作台导航与状态">
+        <div class="brand sidebar-brand">
+          <div class="brand-mark" aria-hidden="true">&gt;_</div>
+          <div><strong>AuditPilot</strong><p>Security Workspace</p></div>
         </div>
 
-        <div class="sidebar-panel">
-          <h2>当前身份</h2>
-          <div class="account-box">
-            <strong id="currentUsernameLabel">-</strong>
-            <span id="currentEmailLabel">-</span>
-            <span id="currentRoleLabel">-</span>
-          </div>
-          <a id="adminPageLink" class="link-button ghost full-width" href="./admin.html" hidden>用户管理</a>
-          <button id="logoutBtn" class="ghost full-width" type="button">退出登录</button>
-        </div>
+        <nav class="side-nav" aria-label="页面导航">
+          <a class="side-nav-item active" href="#workspace"><span aria-hidden="true">⌁</span>审计工作台</a>
+          <a class="side-nav-item" href="#llmSettings"><span aria-hidden="true">⌘</span>模型配置</a>
+          <a class="side-nav-item" href="#findings"><span aria-hidden="true">◇</span>风险发现</a>
+          <a class="side-nav-item" href="#reports"><span aria-hidden="true">↧</span>审计报告</a>
+          <a id="adminPageLink" class="side-nav-item" href="./admin.html" hidden><span aria-hidden="true">◎</span>用户管理</a>
+        </nav>
 
-        <div class="sidebar-panel">
-          <h2>系统状态</h2>
+        <div class="sidebar-section">
+          <div class="section-label">系统状态</div>
           <div class="status-list">
-            <div class="status-row">
-              <span>后端</span>
-              <span id="backendHealth" class="badge warn">未检查</span>
-            </div>
-            <div class="status-row">
-              <span>数据库</span>
-              <span id="databaseHealth" class="badge warn">未检查</span>
-            </div>
-            <div class="status-row">
-              <span>Redis</span>
-              <span id="redisHealth" class="badge warn">未检查</span>
-            </div>
+            <div class="status-row"><span>API 服务</span><span id="backendHealth" class="badge warn">待检测</span></div>
+            <div class="status-row"><span>数据库</span><span id="databaseHealth" class="badge warn">待检测</span></div>
+            <div class="status-row"><span>Redis</span><span id="redisHealth" class="badge warn">待检测</span></div>
           </div>
+          <button id="refreshHealthBtn" class="ghost full-width compact" type="button">刷新服务状态</button>
         </div>
 
-        <div class="sidebar-panel">
-          <h2>任务概览</h2>
-          <div class="task-meta">
-            <div>
-              <span>Task ID</span>
-              <strong id="taskIdLabel">-</strong>
-            </div>
-            <div>
-              <span>状态</span>
-              <strong id="taskStatusLabel">未开始</strong>
-            </div>
-            <div>
-              <span>进度</span>
-              <strong id="taskProgressLabel">0%</strong>
-            </div>
+        <div class="sidebar-footer">
+          <div class="account-box">
+            <div class="avatar" id="currentUserAvatar" aria-hidden="true">U</div>
+            <div><strong id="currentUsernameLabel">-</strong><span id="currentEmailLabel">-</span></div>
+            <span id="currentRoleLabel" class="sr-only">-</span>
           </div>
-          <div class="progress-track">
-            <div id="progressBar" class="progress-bar"></div>
-          </div>
-          <button id="refreshHealthBtn" class="ghost" type="button">刷新系统状态</button>
+          <button id="logoutBtn" class="icon-button" type="button" aria-label="退出登录" title="退出登录">↗</button>
         </div>
       </aside>
 
-      <main class="surface">
-        <section class="hero">
-          <div>
-            <span class="eyebrow">Cyber Audit Matrix</span>
-            <h1>AuditPilot</h1>
-            <p>代码安全审计控制台</p>
-          </div>
-          <div class="hero-stats">
-            <article class="stat-card">
-              <span>High Risk</span>
-              <strong id="highCount">0</strong>
-            </article>
-            <article class="stat-card">
-              <span>Medium Risk</span>
-              <strong id="mediumCount">0</strong>
-            </article>
-            <article class="stat-card">
-              <span>Low Risk</span>
-              <strong id="lowCount">0</strong>
-            </article>
-            <article class="stat-card">
-              <span>Total Findings</span>
-              <strong id="totalCount">0</strong>
-            </article>
-          </div>
+      <main id="mainContent" class="surface">
+        <header class="topbar">
+          <div><span class="eyebrow">// OVERVIEW</span><h1>安全审计工作台<span class="terminal-cursor" aria-hidden="true"></span></h1><p>$ 提交代码、跟踪任务并处理风险发现。</p></div>
+          <div class="topbar-actions"><button id="docsBtn" class="ghost" type="button">API 文档</button><button id="startBtn" class="primary" type="button" disabled>启动审计</button></div>
+        </header>
+
+        <section class="hero-stats" aria-label="风险统计">
+          <article class="stat-card critical"><span>高危风险</span><strong id="highCount">0</strong><small>High & Critical</small></article>
+          <article class="stat-card medium"><span>中危风险</span><strong id="mediumCount">0</strong><small>Medium</small></article>
+          <article class="stat-card low"><span>低危风险</span><strong id="lowCount">0</strong><small>Low</small></article>
+          <article class="stat-card total"><span>全部发现</span><strong id="totalCount">0</strong><small>Total findings</small></article>
         </section>
 
-        <section class="main-content">
-          <article class="panel">
-            <div class="panel-header">
-              <h2>任务控制台</h2>
-              <span class="chip">Source Intake</span>
-            </div>
+        <section id="workspace" class="content-grid">
+          <article class="panel intake-panel">
+            <div class="panel-header"><div><span class="section-label">Source intake</span><h2>创建审计任务</h2></div><span class="chip">01</span></div>
             <div class="grid">
-              <label class="field">
-                <span>后端 API 地址</span>
-                <input id="apiBaseInput" type="text" placeholder="Loaded from .env" />
-              </label>
-              <label class="field">
-                <span>任务名称</span>
-                <input id="taskNameInput" type="text" value="separated-web-audit" />
-              </label>
-              <label class="field">
-                <span>上传源码文件或压缩包</span>
-                <input id="fileInput" type="file" multiple />
+              <label class="field"><span>任务名称</span><input id="taskNameInput" type="text" value="separated-web-audit" /></label>
+              <label class="field"><span>后端 API 地址</span><input id="apiBaseInput" type="url" placeholder="从 .env 读取" /></label>
+            </div>
+            <div class="upload-zone">
+              <div class="upload-icon" aria-hidden="true">↑</div>
+              <div><strong>添加待审计源码</strong><p id="uploadSelectionText" class="helper-text">支持单个文件、多个文件或完整目录</p></div>
+              <div class="upload-actions">
+                <label class="ghost file-button" for="fileInput">选择文件</label>
+                <input id="fileInput" class="sr-only" type="file" multiple />
                 <input id="folderInput" type="file" multiple webkitdirectory hidden />
-                <div class="upload-picker-row">
-                  <button id="pickFolderBtn" class="ghost" type="button">选择目录</button>
-                  <span id="uploadSelectionText" class="helper-text">尚未选择文件或目录</span>
-                </div>
-              </label>
+                <button id="pickFolderBtn" class="ghost" type="button">选择目录</button>
+              </div>
             </div>
-
-            <div class="actions">
-              <button id="uploadBtn" class="secondary" type="button">上传本地源码</button>
-              <button id="demoBtn" class="ghost" type="button">导入示例项目</button>
-              <button id="docsBtn" class="ghost" type="button">API 文档</button>
-              <button id="startBtn" class="primary" type="button" disabled>启动审计</button>
-            </div>
+            <div class="actions"><button id="uploadBtn" class="secondary" type="button">上传源码</button><button id="demoBtn" class="ghost" type="button">使用示例项目</button></div>
           </article>
 
-          <article class="panel">
-            <div class="panel-header">
-              <h2>OWASP Top 10 覆盖矩阵</h2>
-              <span class="chip">Threat Map</span>
-            </div>
-            <div id="top10Grid" class="top10-grid"></div>
+          <article class="panel task-panel">
+            <div class="panel-header"><div><span class="section-label">Current task</span><h2>执行状态</h2></div><span id="taskStatusLabel" class="badge neutral">未开始</span></div>
+            <div class="task-summary"><div><span>Task ID</span><strong id="taskIdLabel">-</strong></div><div><span>当前进度</span><strong id="taskProgressLabel">0%</strong></div></div>
+            <div class="progress-track" role="progressbar" aria-label="审计进度" aria-valuemin="0" aria-valuemax="100"><div id="progressBar" class="progress-bar"></div></div>
+            <div id="logBox" class="log-box" aria-live="polite">[system] waiting for task bootstrap...</div>
           </article>
+        </section>
 
-          <article class="panel">
-            <div class="panel-header">
-              <h2>实时日志流</h2>
-              <span class="chip">Live Stream</span>
+        <section id="llmSettings" class="panel llm-config-panel" aria-labelledby="llmConfigTitle">
+          <div class="panel-header">
+            <div><span class="section-label">Personal provider</span><h2 id="llmConfigTitle">我的 LLM API 配置</h2></div>
+            <span id="llmConfigStatus" class="badge neutral">未配置</span>
+          </div>
+          <form id="llmConfigForm" class="llm-config-form">
+            <div class="grid">
+              <label class="field"><span>API 平台</span><select id="llmProviderSelect"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible / 自定义</option></select></label>
+              <label class="field"><span>模型名称</span><input id="llmModelInput" type="text" list="llmModelOptions" maxlength="255" placeholder="填写 Key 后自动识别" required /><datalist id="llmModelOptions"></datalist></label>
+              <label class="field"><span>API Base URL</span><input id="llmBaseUrlInput" type="url" maxlength="2048" placeholder="https://api.openai.com/v1" required /></label>
+              <label class="field"><span>API Key</span><input id="llmApiKeyInput" type="password" maxlength="4096" autocomplete="off" placeholder="已保存的 Key 不会再次显示；填写后更新" /></label>
             </div>
-            <div id="logBox" class="log-box">[system] waiting for task bootstrap...</div>
-          </article>
+            <p class="helper-text">Key 仅用于当前账户的审计任务，服务端加密保存；切换平台时同步修改 Base URL 与模型。</p>
+            <div class="actions"><button id="saveLlmConfigBtn" class="primary" type="submit">保存我的 API 配置</button><button id="discoverLlmModelsBtn" class="secondary" type="button">识别可用模型</button><button id="clearLlmApiKeyBtn" class="ghost" type="button">删除已保存的 Key</button></div>
+            <div id="llmConfigMessage" class="auth-message" role="status" hidden></div>
+          </form>
+        </section>
 
-          <article class="panel">
-            <div class="panel-header">
-              <h2>漏洞详情</h2>
-              <span class="chip">Findings</span>
-            </div>
-            <div id="findingsWrap" class="empty">任务完成后，这里会展示漏洞细节、复现路径与修复建议。</div>
-          </article>
+        <section class="panel matrix-panel">
+          <div class="panel-header"><div><span class="section-label">Threat map</span><h2>OWASP Top 10 覆盖矩阵</h2></div><span class="chip">风险分类</span></div>
+          <div id="top10Grid" class="top10-grid"></div>
+        </section>
 
-          <article class="panel">
-            <div class="panel-header">
-              <h2>报告下载</h2>
-              <span class="chip">Artifacts</span>
-            </div>
-            <div id="reportWrap" hidden></div>
-          </article>
+        <section id="findings" class="panel">
+          <div class="panel-header"><div><span class="section-label">Findings</span><h2>漏洞详情</h2></div><span class="chip">审计结果</span></div>
+          <div id="findingsWrap" class="empty"><strong>还没有风险发现</strong><span>上传源码并完成审计后，漏洞证据、影响范围和修复建议会显示在这里。</span></div>
+        </section>
+
+        <section id="reports" class="panel">
+          <div class="panel-header"><div><span class="section-label">Artifacts</span><h2>审计报告</h2></div><span class="chip">HTML · Markdown · JSON</span></div>
+          <div id="reportWrap" class="empty" hidden></div>
         </section>
       </main>
     </div>
 
-    <script src="./assets/runtime-config.js?v=dev-20260616-1"></script>
-    <script src="./assets/app.js?v=dev-20260616-1"></script>
+    <script src="./assets/runtime-config.js?v=refactor-20260723-models"></script>
+    <script type="module" src="./assets/app.js?v=refactor-20260723-models"></script>
   </body>
 </html>

@@ -14,6 +14,7 @@ from backend.app.models import AuditTask, Finding, User
 from backend.app.services.events import event_bus
 
 _background_tasks: set[asyncio.Task[None]] = set()
+_active_audits: dict[str, asyncio.Task[None]] = {}
 _FINDING_CORE_FIELDS = {
     "source",
     "severity",
@@ -76,7 +77,7 @@ async def run_audit_task(task_id: str) -> None:
     db = SessionLocal()
     try:
         task = db.get(AuditTask, task_id)
-        if task is None:
+        if task is None or task.status not in {"queued", "running"}:
             return
 
         task.status = "running"
@@ -106,6 +107,10 @@ async def run_audit_task(task_id: str) -> None:
 
         result = await graph.ainvoke(initial_state)
 
+        # Another session may have stopped the task while the graph was awaiting I/O.
+        db.refresh(task)
+        if task.status == "stopped":
+            return
         task.language = result["language"] or None
         task.framework = result["framework"] or None
         task.project_path = result["project_path"] or None
@@ -139,6 +144,15 @@ async def run_audit_task(task_id: str) -> None:
                 "message": f"审计完成，共发现 {len(result['findings'])} 条漏洞",
             },
         )
+    except asyncio.CancelledError:
+        db.rollback()
+        task = db.get(AuditTask, task_id)
+        if task is not None and task.status != "stopped":
+            task.status = "stopped"
+            task.finished_at = utcnow()
+            db.commit()
+        await event_bus.publish(task_id, {"event": "progress", "value": 0, "message": "Audit task stopped by administrator"})
+        raise
     except Exception as exc:
         task = db.get(AuditTask, task_id)
         if task is not None:
@@ -153,8 +167,32 @@ async def run_audit_task(task_id: str) -> None:
 def schedule_audit(task_id: str) -> asyncio.Task[None]:
     task = asyncio.create_task(run_audit_task(task_id))
     _background_tasks.add(task)
+    _active_audits[task_id] = task
     task.add_done_callback(_background_tasks.discard)
+    task.add_done_callback(lambda _: _active_audits.pop(task_id, None))
     return task
+
+
+async def stop_audit(task_id: str) -> AuditTask | None:
+    """Cancel an in-process audit and persist its terminal stopped state."""
+    task = _active_audits.get(task_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+    db = SessionLocal()
+    try:
+        record = db.get(AuditTask, task_id)
+        if record is None or record.status not in {"queued", "running"}:
+            return None
+        record.status = "stopped"
+        record.finished_at = utcnow()
+        db.commit()
+        db.refresh(record)
+    finally:
+        db.close()
+
+    await event_bus.publish(task_id, {"event": "progress", "value": 0, "message": "Audit task stopped by administrator"})
+    return record
 
 
 def report_paths(task: AuditTask) -> dict[str, Path]:

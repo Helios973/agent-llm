@@ -225,6 +225,7 @@ async function main() {
   const debugPort = debugPortForBrowser(browserName);
   const userDataDir = path.join(TMP_ROOT, `register-slider-${browserName}`);
   const screenshotPath = path.join(TMP_ROOT, `register-slider-${browserName}.png`);
+  const workspaceScreenshotPath = path.join(TMP_ROOT, `workspace-${browserName}.png`);
 
   await fs.rm(userDataDir, { recursive: true, force: true });
   const browser = spawn(
@@ -267,19 +268,30 @@ async function main() {
       "Slider label should prompt the user to drag the control.",
     );
 
-    const verifiedState = await send("Runtime.evaluate", {
+    // The backend intentionally rejects proofs completed faster than a human
+    // interaction. Wait past the configured minimum and then poll the async UI.
+    await delay(1300);
+    await send("Runtime.evaluate", {
       expression: `(() => {
         const thumb = document.getElementById("registerSliderThumb");
         thumb?.focus();
         thumb?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-        return {
+      })()`,
+    });
+
+    let verifiedState;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      verifiedState = await send("Runtime.evaluate", {
+        expression: `(() => ({
           submitDisabled: document.getElementById("registerSubmitBtn")?.disabled,
           sliderStatus: document.getElementById("registerSliderCaptcha")?.dataset.status,
           sliderText: document.getElementById("registerSliderLabel")?.textContent,
-        };
-      })()`,
-      returnByValue: true,
-    });
+        }))()`,
+        returnByValue: true,
+      });
+      if (verifiedState.result.value.sliderStatus === "verified") break;
+      await delay(100);
+    }
 
     const verifiedValue = verifiedState.result.value;
     assert(verifiedValue.submitDisabled === false, "Submit button should unlock after slider verification.");
@@ -309,8 +321,28 @@ async function main() {
     });
     await fs.writeFile(screenshotPath, Buffer.from(screenshot.data, "base64"));
 
+    const workspaceState = await send("Runtime.evaluate", {
+      expression: `(() => {
+        document.getElementById("authScreen").hidden = true;
+        document.getElementById("appShell").hidden = false;
+        document.getElementById("currentUsernameLabel").textContent = "preview-user";
+        document.getElementById("currentEmailLabel").textContent = "preview@auditpilot.local";
+        const shell = document.getElementById("appShell").getBoundingClientRect();
+        const sidebar = document.querySelector(".sidebar").getBoundingClientRect();
+        const cards = document.querySelectorAll(".stat-card").length;
+        return { shellWidth: Math.round(shell.width), sidebarWidth: Math.round(sidebar.width), cards };
+      })()`,
+      returnByValue: true,
+    });
+    assert(workspaceState.result.value.shellWidth >= 1200, "Workspace should fill the desktop viewport.");
+    assert(workspaceState.result.value.sidebarWidth >= 220, "Workspace sidebar should be visible.");
+    assert(workspaceState.result.value.cards === 4, "Workspace should render four risk summary cards.");
+    const workspaceScreenshot = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
+    await fs.writeFile(workspaceScreenshotPath, Buffer.from(workspaceScreenshot.data, "base64"));
+
     console.log(`Slider register test passed in ${browserName}.`);
     console.log(`Screenshot saved to ${screenshotPath}`);
+    console.log(`Workspace screenshot saved to ${workspaceScreenshotPath}`);
   } finally {
     client?.close();
     browser.kill("SIGTERM");

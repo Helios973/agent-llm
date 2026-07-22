@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.models import AuditTask, User
 from backend.app.schemas.auth import AdminTaskSummary, AdminUserSummary, AdminUserUpdateRequest
+from backend.app.services.audit_service import stop_audit
 from backend.app.services.auth_service import require_admin
 
 
@@ -92,3 +93,37 @@ def list_user_tasks(
         )
         for task in tasks
     ]
+
+
+@router.post("/tasks/{task_id}/stop", response_model=AdminTaskSummary)
+async def stop_user_task(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> AdminTaskSummary:
+    task = db.get(AuditTask, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    owner = db.get(User, task.user_id)
+    if owner is None or owner.role != "user":
+        raise HTTPException(status_code=400, detail="Only ordinary user audit tasks can be stopped here")
+    if task.status not in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="Only queued or running tasks can be stopped")
+
+    stopped = await stop_audit(task_id)
+    if stopped is None:
+        raise HTTPException(status_code=409, detail="Task is no longer running")
+    return AdminTaskSummary(
+        id=stopped.id,
+        user_id=stopped.user_id,
+        task_name=stopped.task_name,
+        status=stopped.status,
+        upload_name=stopped.upload_name,
+        language=stopped.language,
+        framework=stopped.framework,
+        created_at=stopped.created_at,
+        started_at=stopped.started_at,
+        finished_at=stopped.finished_at,
+        finding_count=0,
+    )

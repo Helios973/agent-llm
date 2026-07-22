@@ -13,6 +13,9 @@ AuditPilot is a local code security audit prototype built with FastAPI, a static
 - WebSocket progress events
 - HTML, Markdown, and JSON reports
 - Admin page for user control and auditing user tasks
+- Per-user OpenAI, DeepSeek, and OpenAI-compatible API settings with encrypted API-key storage
+- Automatic model discovery from each user's configured OpenAI-compatible `/models` endpoint
+- Admin stop control for queued or running ordinary-user audits
 
 ## Project Layout
 
@@ -61,6 +64,7 @@ BACKEND_PORT=8000
 FRONTEND_HOST=127.0.0.1
 FRONTEND_PORT=3000
 AUTH_SECRET_KEY=
+CREDENTIAL_ENCRYPTION_KEY=
 ADMIN_BOOTSTRAP_USERNAME=
 ADMIN_BOOTSTRAP_EMAIL=
 ADMIN_BOOTSTRAP_PASSWORD=
@@ -73,6 +77,7 @@ JAVA_AUDIT_SKILLS_ROOT=
 ```
 
 Set `AUTH_SECRET_KEY` explicitly if you want stable tokens across restarts. When it is empty, the backend falls back to a per-process secret so placeholder values cannot be abused.
+For local use, the first API-key save automatically creates `backend/data/.credential_encryption_key` and reuses it across restarts. An explicit `CREDENTIAL_ENCRYPTION_KEY` takes precedence; existing deployments with only `AUTH_SECRET_KEY` keep using that value. The raw per-user key is never returned by the API or shown again in the UI.
 Bootstrap admin creation is disabled by default and only runs when `ADMIN_BOOTSTRAP_USERNAME`, `ADMIN_BOOTSTRAP_EMAIL`, and a non-placeholder `ADMIN_BOOTSTRAP_PASSWORD` are all configured. Existing admin passwords are not overwritten unless `ADMIN_BOOTSTRAP_RESET_PASSWORD=true`.
 The registration slider now requires a backend-issued, single-use proof token before account creation. This closes the old direct-API bypass for the frontend-only check, but an internet-facing deployment should still consider a managed bot-defense service such as Cloudflare Turnstile or hCaptcha.
 If `JAVA_AUDIT_SKILLS_ROOT` is empty, the backend defaults to `~/.codex/skills` and will automatically append installed Java audit skill guidance for Java projects.
@@ -118,7 +123,20 @@ On Windows:
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
+Feature integration checks:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\test_user_llm_config_and_task_stop.py
+```
+
 The smoke test registers a temporary user, uploads the sample vulnerable file, starts an audit, waits for completion, and prints report information.
+
+Frontend-only checks do not require pytest or a build step:
+
+```bash
+python scripts/check_frontend.py
+node scripts/test_register_slider.js --url=http://127.0.0.1:3000 --browser=chrome
+```
 
 ## Logs And Runtime Data
 

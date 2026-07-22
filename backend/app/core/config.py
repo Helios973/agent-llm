@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     frontend_public_url: str | None = None
     frontend_api_base_url: str | None = None
     auth_secret_key: str | None = None
+    credential_encryption_key: str | None = None
     auth_token_ttl_seconds: int = 604800
     admin_bootstrap_username: str | None = None
     admin_bootstrap_email: str | None = None
@@ -78,6 +79,25 @@ class Settings(BaseSettings):
         if not candidate or candidate in INSECURE_AUTH_SECRET_KEYS:
             return None
         return candidate
+
+    @property
+    def resolved_credential_encryption_key(self) -> str | None:
+        """Return the stable secret used to encrypt per-user provider API keys."""
+        candidate = (self.credential_encryption_key or self.auth_secret_key or "").strip()
+        if not candidate or candidate in INSECURE_AUTH_SECRET_KEYS:
+            return None
+        return candidate
+
+    @property
+    def resolved_explicit_credential_encryption_key(self) -> str | None:
+        candidate = (self.credential_encryption_key or "").strip()
+        if not candidate or candidate in INSECURE_AUTH_SECRET_KEYS:
+            return None
+        return candidate
+
+    @property
+    def local_credential_key_path(self) -> Path:
+        return self.storage_root / ".credential_encryption_key"
 
     @property
     def bootstrap_admin_credentials(self) -> tuple[str, str, str] | None:
