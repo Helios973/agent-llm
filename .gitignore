@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .env
+.env.docker
+backups/
 backend/data/
 venv/
 .venv/

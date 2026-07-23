@@ -128,6 +128,93 @@ python dev.py restart
 
 `dev.py` creates or reuses `.venv`, installs `requirements.txt`, generates `frontend/assets/runtime-config.js`, and starts the backend and frontend. The project uses `.venv` only; do not activate an old `venv` directory.
 
+## Linux 单脚本启动
+
+把完整项目目录上传到 Linux 服务器后，只需要执行这一条命令：
+
+```bash
+cd /opt/auditpilot
+sudo bash start-linux.sh
+```
+
+`start-linux.sh` 会自动安装 Python、Nginx、Redis 和项目依赖，创建独立服务用户、生成安全配置、写入 systemd 服务、配置 Nginx 反向代理、启动服务并完成健康检查。默认使用持久化 SQLite 数据库，访问入口为：
+
+```text
+http://服务器IP/
+```
+
+首次启动时脚本会在终端输出管理员账号和随机密码；运行配置保存于 `/etc/auditpilot/auditpilot.env`。指定域名、端口或固定管理员信息：
+
+```bash
+sudo env \
+  PUBLIC_ORIGIN=https://audit.example.com \
+  HTTP_PORT=80 \
+  ADMIN_BOOTSTRAP_USERNAME=admin \
+  ADMIN_BOOTSTRAP_EMAIL=admin@example.com \
+  ADMIN_BOOTSTRAP_PASSWORD='StrongPassword-ChangeMe' \
+  bash start-linux.sh
+```
+
+日常操作：
+
+```bash
+sudo bash start-linux.sh restart
+sudo bash start-linux.sh stop
+sudo bash start-linux.sh status
+sudo bash start-linux.sh logs
+```
+
+## Linux Docker 一键部署
+
+仓库内置 Linux 部署脚本，包含 Nginx、FastAPI、MySQL、Redis、数据库迁移、健康检查和持久卷：
+
+```bash
+cd /opt
+git clone <YOUR_REPOSITORY_URL> auditpilot
+cd auditpilot
+sudo bash deploy-linux.sh
+```
+
+脚本会自动完成：
+
+- 检查并安装 Docker Engine 与 Compose 插件；
+- 生成权限为 `600` 的 `.env.docker`；
+- 随机生成 MySQL、Token 签名和 API Key 加密密钥；
+- 创建管理员账号密码；
+- 构建镜像、迁移数据库并启动全部服务；
+- 等待健康检查完成，然后输出访问地址和管理员密码。
+
+首次部署前可通过环境变量指定地址、端口和管理员：
+
+```bash
+sudo env \
+  PUBLIC_ORIGIN=http://192.0.2.10:8080 \
+  HTTP_PORT=8080 \
+  ADMIN_BOOTSTRAP_USERNAME=admin \
+  ADMIN_BOOTSTRAP_EMAIL=admin@example.com \
+  ADMIN_BOOTSTRAP_PASSWORD='Replace-With-A-Strong-Password' \
+  bash deploy-linux.sh
+```
+
+常用运维命令：
+
+```bash
+sudo bash deploy-linux.sh status
+sudo bash deploy-linux.sh logs
+sudo bash deploy-linux.sh restart
+sudo bash deploy-linux.sh update
+sudo bash deploy-linux.sh stop
+sudo bash deploy-linux.sh down
+```
+
+配置位于 `.env.docker`，业务上传、项目、报告、MySQL 和 Redis 数据保存在 Docker 持久卷中。修改 `.env.docker` 后执行：
+
+```bash
+sudo bash deploy-linux.sh update
+```
+
+如果通过域名和 HTTPS 对外服务，将 `PUBLIC_ORIGIN` 设置为最终的 `https://域名`，并在当前 Nginx 前配置证书终止或云负载均衡。
+
 Optional overrides:
 
 ```bash
