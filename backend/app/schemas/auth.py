@@ -13,6 +13,7 @@ class UserPublic(BaseModel):
     email: str
     role: str
     is_active: bool
+    monthly_token_limit: int = 0
     created_at: datetime
 
 
@@ -73,6 +74,8 @@ class UserLLMConfigResponse(BaseModel):
     model: str | None = None
     api_key_configured: bool = False
     updated_at: datetime | None = None
+    monthly_token_limit: int = 0
+    monthly_tokens_used: int = 0
 
 
 class UserLLMConfigUpdateRequest(BaseModel):
@@ -86,8 +89,8 @@ class UserLLMConfigUpdateRequest(BaseModel):
     @classmethod
     def validate_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"openai", "deepseek", "openai-compatible"}:
-            raise ValueError("Provider must be openai, deepseek, or openai-compatible")
+        if normalized not in {"openai", "deepseek", "openai-compatible", "ollama", "azure-openai"}:
+            raise ValueError("Unsupported provider")
         return normalized
 
     @field_validator("base_url")
@@ -135,8 +138,8 @@ class UserLLMModelDiscoverRequest(BaseModel):
     @classmethod
     def validate_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"openai", "deepseek", "openai-compatible"}:
-            raise ValueError("Provider must be openai, deepseek, or openai-compatible")
+        if normalized not in {"openai", "deepseek", "openai-compatible", "ollama", "azure-openai"}:
+            raise ValueError("Unsupported provider")
         return normalized
 
     @field_validator("base_url")
@@ -167,6 +170,55 @@ class UserLLMModelDiscoverResponse(BaseModel):
     models: list[str]
 
 
+class LLMUsageResponse(BaseModel):
+    monthly_token_limit: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    request_count: int
+
+
+class LLMUsageHeatmapDay(BaseModel):
+    date: str
+    total_tokens: int
+    request_count: int
+    level: int = Field(ge=0, le=4)
+
+
+class LLMUsageModelStat(BaseModel):
+    provider: str
+    model: str
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    percentage: float
+
+
+class LLMUsageAnalyticsResponse(BaseModel):
+    period: str
+    sessions: int
+    messages: int
+    total_tokens: int
+    active_days: int
+    current_streak: int
+    longest_streak: int
+    peak_hour: int | None = None
+    favorite_model: str | None = None
+    heatmap: list[LLMUsageHeatmapDay] = Field(default_factory=list)
+    models: list[LLMUsageModelStat] = Field(default_factory=list)
+
+
+class AuthSessionResponse(BaseModel):
+    id: str
+    user_agent: str | None = None
+    ip_address: str | None = None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    current: bool = False
+
+
 class AdminUserSummary(UserPublic):
     task_count: int = 0
 
@@ -183,6 +235,31 @@ class AdminUserUpdateRequest(BaseModel):
         if value not in {"user", "admin"}:
             raise ValueError("Role must be user or admin")
         return value
+
+
+class AdminQuotaUpdateRequest(BaseModel):
+    monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
+
+
+class AdminAuditLogResponse(BaseModel):
+    id: str
+    admin_user_id: str
+    action: str
+    target_type: str
+    target_id: str | None = None
+    details: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AdminAuditLogClearRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=500)
+    clear_all: bool = False
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> "AdminAuditLogClearRequest":
+        if not self.clear_all and not self.ids:
+            raise ValueError("Select at least one log entry or clear all logs")
+        return self
 
 
 class AdminTaskSummary(BaseModel):

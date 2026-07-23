@@ -4,8 +4,6 @@ import base64
 import hashlib
 import secrets
 from dataclasses import dataclass
-from typing import Any
-
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException, status
@@ -13,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import settings
 from backend.app.models import UserLLMConfig
+from backend.app.services.llm_providers import extract_model_ids, get_provider_adapter
 
 
 @dataclass(frozen=True)
@@ -91,6 +90,8 @@ def serialize_user_llm_config(config: UserLLMConfig | None) -> dict[str, object]
             "model": None,
             "api_key_configured": False,
             "updated_at": None,
+            "monthly_token_limit": settings.llm_default_monthly_token_limit,
+            "monthly_tokens_used": 0,
         }
     return {
         "provider": config.provider,
@@ -98,6 +99,8 @@ def serialize_user_llm_config(config: UserLLMConfig | None) -> dict[str, object]
         "model": config.model,
         "api_key_configured": bool(config.api_key_encrypted),
         "updated_at": config.updated_at,
+        "monthly_token_limit": config.monthly_token_limit,
+        "monthly_tokens_used": 0,
     }
 
 
@@ -118,6 +121,7 @@ def update_user_llm_config(
             provider=provider,
             base_url=_normalize_base_url(base_url),
             model=model,
+            monthly_token_limit=settings.llm_default_monthly_token_limit,
         )
         db.add(config)
     else:
@@ -137,41 +141,23 @@ def update_user_llm_config(
 
 def get_user_llm_connection(db: Session, user_id: str) -> LLMConnection | None:
     config = db.get(UserLLMConfig, user_id)
-    if config is None or not config.api_key_encrypted:
+    if config is None or (not config.api_key_encrypted and config.provider != "ollama"):
         return None
-    try:
-        api_key = _fernet().decrypt(config.api_key_encrypted.encode("ascii")).decode("utf-8")
-    except (InvalidToken, UnicodeDecodeError):
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Stored API key cannot be decrypted; update the provider configuration",
-        ) from None
+    api_key = ""
+    if config.api_key_encrypted:
+        try:
+            api_key = _fernet().decrypt(config.api_key_encrypted.encode("ascii")).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stored API key cannot be decrypted; update the provider configuration",
+            ) from None
     return LLMConnection(
         provider=config.provider,
         base_url=config.base_url,
         model=config.model,
         api_key=api_key,
     )
-
-
-def _model_ids(payload: Any) -> list[str]:
-    if not isinstance(payload, dict):
-        return []
-    raw_models = payload.get("data", payload.get("models", []))
-    if not isinstance(raw_models, list):
-        return []
-
-    model_ids: set[str] = set()
-    for item in raw_models:
-        if isinstance(item, str):
-            model_id = item.strip()
-        elif isinstance(item, dict):
-            model_id = str(item.get("id") or item.get("name") or item.get("model") or "").strip()
-        else:
-            model_id = ""
-        if model_id:
-            model_ids.add(model_id)
-    return sorted(model_ids, key=str.casefold)
 
 
 async def discover_user_llm_models(
@@ -187,14 +173,16 @@ async def discover_user_llm_models(
     if effective_api_key is None:
         stored = get_user_llm_connection(db, user_id)
         effective_api_key = stored.api_key if stored is not None else None
-    if not effective_api_key:
+    if not effective_api_key and provider != "ollama":
         raise HTTPException(status_code=400, detail="Enter an API key or save one before discovering models")
+
+    adapter = get_provider_adapter(provider)
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.llm_timeout_seconds), follow_redirects=True) as client:
             response = await client.get(
-                f"{normalized_base_url}/models",
-                headers={"Authorization": f"Bearer {effective_api_key}", "Accept": "application/json"},
+                adapter.models_url(normalized_base_url),
+                headers={**adapter.auth_headers(effective_api_key or ""), "Accept": "application/json"},
             )
     except httpx.RequestError as exc:
         raise HTTPException(status_code=502, detail=f"Model discovery request failed: {exc.__class__.__name__}") from None
@@ -205,7 +193,7 @@ async def discover_user_llm_models(
             detail=f"API platform returned HTTP {response.status_code} during model discovery",
         )
     try:
-        models = _model_ids(response.json())
+        models = extract_model_ids(response.json())
     except ValueError:
         raise HTTPException(status_code=502, detail="API platform returned a non-JSON model list") from None
     if not models:

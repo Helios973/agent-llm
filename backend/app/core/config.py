@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     sql_echo: bool = False
     default_user_id: str = "00000000-0000-0000-0000-000000000001"
     report_history_limit: int = 200
+    upload_max_files: int = 1000
+    upload_max_file_bytes: int = 200 * 1024 * 1024
+    upload_max_total_bytes: int = 200 * 1024 * 1024
+    extraction_max_files: int = 10000
+    extraction_max_total_bytes: int = 500 * 1024 * 1024
+    extraction_max_ratio: float = 200.0
+    user_storage_quota_bytes: int = 2 * 1024 * 1024 * 1024
     llm_enabled: bool = True
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -56,6 +63,7 @@ class Settings(BaseSettings):
     llm_max_review_files: int = 6
     llm_max_file_chars: int = 6000
     llm_max_findings: int = 8
+    llm_default_monthly_token_limit: int = 1_000_000
     llm_context_index_max_files: int = 160
     llm_context_reference_limit: int = 3
     java_audit_skills_enabled: bool = True
@@ -98,6 +106,10 @@ class Settings(BaseSettings):
     @property
     def local_credential_key_path(self) -> Path:
         return self.storage_root / ".credential_encryption_key"
+
+    @property
+    def local_auth_key_path(self) -> Path:
+        return self.storage_root / ".auth_secret_key"
 
     @property
     def bootstrap_admin_credentials(self) -> tuple[str, str, str] | None:

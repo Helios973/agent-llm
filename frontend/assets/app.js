@@ -4,6 +4,10 @@ import {
   createJsonClient,
   escapeHtml,
   initials,
+  localizeFindingDescription,
+  localizeFindingSeverity,
+  localizeFindingSource,
+  localizeFindingTitle,
   normalizeBaseUrl,
   normalizePath,
 } from "./core.js";
@@ -19,9 +23,14 @@ const REGISTER_SLIDER_TEXT = {
   reset: "\u5df2\u91cd\u7f6e\u6ed1\u5757\uff0c\u8bf7\u91cd\u65b0\u9a8c\u8bc1",
 };
 const REGISTER_SLIDER_KEYBOARD_STEP = 12;
+const WORKSPACE_STORAGE_PREFIX = "auditpilot.workspace.v1";
+const WORKSPACE_LOG_LIMIT = 180;
+const WORKSPACE_TASK_LOG_LIMIT = 20;
 const PROVIDER_DEFAULTS = {
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
   deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  ollama: { baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3" },
+  "azure-openai": { baseUrl: "https://RESOURCE.openai.azure.com/openai/v1", model: "DEPLOYMENT" },
   "openai-compatible": { baseUrl: "", model: "" },
 };
 
@@ -103,7 +112,16 @@ const state = {
   accessToken: window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY),
   currentUser: null,
   llmApiKeyConfigured: false,
+  tasks: [],
+  baselineTasks: [],
+  selectedTaskIds: new Set(),
+  usagePeriod: "all",
+  usageView: "overview",
+  usageAnalytics: null,
   logs: ["[system] 等待任务开始..."],
+  logsByTask: {},
+  workspaceStateFound: false,
+  restoringWorkspace: false,
 };
 
 const elements = {
@@ -145,13 +163,18 @@ const elements = {
   clearLlmApiKeyBtn: document.getElementById("clearLlmApiKeyBtn"),
   llmConfigStatus: document.getElementById("llmConfigStatus"),
   llmConfigMessage: document.getElementById("llmConfigMessage"),
+  llmUsageLabel: document.getElementById("llmUsageLabel"),
+  sessionsTable: document.getElementById("sessionsTable"),
+  refreshSessionsBtn: document.getElementById("refreshSessionsBtn"),
   apiBaseInput: document.getElementById("apiBaseInput"),
   taskNameInput: document.getElementById("taskNameInput"),
+  baselineTaskSelect: document.getElementById("baselineTaskSelect"),
   fileInput: document.getElementById("fileInput"),
   folderInput: document.getElementById("folderInput"),
   pickFolderBtn: document.getElementById("pickFolderBtn"),
   uploadSelectionText: document.getElementById("uploadSelectionText"),
   uploadBtn: document.getElementById("uploadBtn"),
+  uploadMessage: document.getElementById("uploadMessage"),
   demoBtn: document.getElementById("demoBtn"),
   startBtn: document.getElementById("startBtn"),
   docsBtn: document.getElementById("docsBtn"),
@@ -171,6 +194,21 @@ const elements = {
   findingsWrap: document.getElementById("findingsWrap"),
   reportWrap: document.getElementById("reportWrap"),
   top10Grid: document.getElementById("top10Grid"),
+  taskStatusFilter: document.getElementById("taskStatusFilter"),
+  taskSearchInput: document.getElementById("taskSearchInput"),
+  refreshTasksBtn: document.getElementById("refreshTasksBtn"),
+  taskCenterMessage: document.getElementById("taskCenterMessage"),
+  taskTable: document.getElementById("taskTable"),
+  bulkDeleteTasksBtn: document.getElementById("bulkDeleteTasksBtn"),
+  mainContent: document.getElementById("mainContent"),
+  pageEyebrow: document.getElementById("pageEyebrow"),
+  pageTitle: document.getElementById("pageTitle"),
+  pageSubtitle: document.getElementById("pageSubtitle"),
+  usageOverviewPanel: document.getElementById("usageOverviewPanel"),
+  usageModelsPanel: document.getElementById("usageModelsPanel"),
+  usageStatGrid: document.getElementById("usageStatGrid"),
+  usageHeatmap: document.getElementById("usageHeatmap"),
+  usageSummaryText: document.getElementById("usageSummaryText"),
 };
 
 elements.apiBaseInput.value = configuredApiBase();
@@ -543,6 +581,89 @@ function clearSession() {
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
 }
 
+function workspaceStorageKey() {
+  return state.currentUser?.id ? `${WORKSPACE_STORAGE_PREFIX}.${state.currentUser.id}` : "";
+}
+
+function taskLogKey(taskId = state.taskId) {
+  return taskId || "__workspace__";
+}
+
+function defaultTaskLogs(taskId = state.taskId) {
+  return taskId
+    ? [`[system] 已恢复任务 ${String(taskId).slice(0, 8)}，正在同步状态...`]
+    : ["[system] 等待任务开始..."];
+}
+
+function renderTaskLogs() {
+  elements.logBox.textContent = state.logs.join("\n");
+  elements.logBox.scrollTop = elements.logBox.scrollHeight;
+}
+
+function persistWorkspaceState() {
+  const key = workspaceStorageKey();
+  if (!key || state.restoringWorkspace) return;
+  state.logsByTask[taskLogKey()] = state.logs.slice(-WORKSPACE_LOG_LIMIT);
+  const retainedEntries = Object.entries(state.logsByTask).slice(-WORKSPACE_TASK_LOG_LIMIT);
+  state.logsByTask = Object.fromEntries(retainedEntries);
+  try {
+    window.localStorage.setItem(key, JSON.stringify({
+      task_id: state.taskId,
+      task_status: state.taskStatus,
+      progress: state.progress,
+      logs_by_task: state.logsByTask,
+    }));
+    state.workspaceStateFound = true;
+  } catch {
+    // Browser storage may be full; live task rendering continues normally.
+  }
+}
+
+function restoreWorkspaceState() {
+  const key = workspaceStorageKey();
+  if (!key) return;
+  state.restoringWorkspace = true;
+  try {
+    const raw = window.localStorage.getItem(key);
+    state.workspaceStateFound = Boolean(raw);
+    const saved = JSON.parse(raw || "{}");
+    state.logsByTask = saved.logs_by_task && typeof saved.logs_by_task === "object" ? saved.logs_by_task : {};
+    state.taskId = typeof saved.task_id === "string" && saved.task_id ? saved.task_id : null;
+    state.taskStatus = typeof saved.task_status === "string" ? saved.task_status : "未开始";
+    state.progress = Number.isFinite(Number(saved.progress)) ? Math.max(0, Math.min(100, Number(saved.progress))) : 0;
+  } catch {
+    state.workspaceStateFound = false;
+    state.logsByTask = {};
+    state.taskId = null;
+    state.taskStatus = "未开始";
+    state.progress = 0;
+  }
+  const storedLogs = state.logsByTask[taskLogKey()];
+  state.logs = Array.isArray(storedLogs) && storedLogs.length ? storedLogs.slice(-WORKSPACE_LOG_LIMIT) : defaultTaskLogs();
+  renderTaskLogs();
+  setTaskMeta();
+  state.restoringWorkspace = false;
+}
+
+function clearTaskWorkspace(taskId) {
+  delete state.logsByTask[taskLogKey(taskId)];
+  if (state.taskId === taskId) {
+    stopPolling();
+    closeSocket();
+    state.taskId = null;
+    state.taskStatus = "未开始";
+    state.progress = 0;
+    state.logs = state.logsByTask.__workspace__ || defaultTaskLogs(null);
+    renderFindings([]);
+    elements.reportWrap.hidden = true;
+    elements.reportWrap.className = "";
+    elements.reportWrap.innerHTML = "";
+    renderTaskLogs();
+    setTaskMeta();
+  }
+  persistWorkspaceState();
+}
+
 function showApp() {
   elements.authScreen.hidden = true;
   elements.appShell.hidden = false;
@@ -551,8 +672,12 @@ function showApp() {
   elements.currentRoleLabel.textContent = state.currentUser?.role === "admin" ? "管理员" : "普通用户";
   elements.currentUserAvatar.textContent = initials(state.currentUser?.username);
   elements.adminPageLink.hidden = state.currentUser?.role !== "admin";
+  restoreWorkspaceState();
   refreshHealth();
   void loadLlmConfig();
+  void loadUsageAnalytics();
+  void initializeWorkspaceTasks();
+  void loadSessions();
 }
 
 function setLlmConfigMessage(message = "", level = "error") {
@@ -573,6 +698,9 @@ function setLlmConfigStatus(config) {
   elements.llmConfigStatus.textContent = configured ? "Key 已配置" : "未配置";
   elements.llmConfigStatus.className = `badge ${configured ? "ok" : "neutral"}`;
   elements.clearLlmApiKeyBtn.disabled = !configured;
+  const used = Number(config?.monthly_tokens_used || 0).toLocaleString();
+  const limit = Number(config?.monthly_token_limit || 0).toLocaleString();
+  elements.llmUsageLabel.textContent = `本月用量：${used} / ${limit} tokens`;
 }
 
 function renderLlmModelOptions(models) {
@@ -616,7 +744,7 @@ async function discoverLlmModels({ silent = false } = {}) {
     if (!silent) setLlmConfigMessage("请先填写 API Base URL。");
     return [];
   }
-  if (!apiKey && !state.llmApiKeyConfigured) {
+  if (!apiKey && !state.llmApiKeyConfigured && elements.llmProviderSelect.value !== "ollama") {
     if (!silent) setLlmConfigMessage("请先填写 API Key。");
     return [];
   }
@@ -703,6 +831,295 @@ async function clearLlmApiKey() {
   }
 }
 
+function compactNumber(value) {
+  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(Number(value || 0));
+}
+
+function formatPeakHour(hour) {
+  if (hour === null || hour === undefined) return "—";
+  const normalized = Number(hour);
+  const suffix = normalized < 12 ? "AM" : "PM";
+  return `${normalized % 12 || 12} ${suffix}`;
+}
+
+function renderUsageOverview(data) {
+  const stats = [
+    ["Sessions", data.sessions],
+    ["Messages", data.messages],
+    ["Total tokens", compactNumber(data.total_tokens)],
+    ["Active days", data.active_days],
+    ["Current streak", `${data.current_streak}d`],
+    ["Longest streak", `${data.longest_streak}d`],
+    ["Peak hour", formatPeakHour(data.peak_hour)],
+    ["Favorite model", data.favorite_model || "—"],
+  ];
+  elements.usageStatGrid.innerHTML = stats.map(([label, value]) => `
+    <article class="usage-stat-card"><span>${escapeHtml(label)}</span><strong title="${escapeHtml(value)}">${escapeHtml(value)}</strong></article>
+  `).join("");
+  elements.usageHeatmap.innerHTML = (data.heatmap || []).map((day) => `
+    <span class="usage-heat-cell" data-level="${Number(day.level || 0)}" title="${escapeHtml(day.date)} · ${Number(day.total_tokens || 0).toLocaleString()} tokens · ${Number(day.request_count || 0)} requests"></span>
+  `).join("");
+  elements.usageSummaryText.textContent = `共使用 ${Number(data.total_tokens || 0).toLocaleString()} tokens，覆盖 ${data.active_days} 个活跃日。`;
+}
+
+function renderUsageModels(data) {
+  const models = data.models || [];
+  if (!models.length) {
+    elements.usageModelsPanel.innerHTML = '<div class="empty">当前周期还没有模型调用记录。</div>';
+    return;
+  }
+  elements.usageModelsPanel.innerHTML = `<table class="data-table">
+    <thead><tr><th>模型</th><th>平台</th><th>请求</th><th>输入</th><th>输出</th><th>Total tokens</th><th>占比</th></tr></thead>
+    <tbody>${models.map((item) => `<tr>
+      <td class="usage-model-name"><strong>${escapeHtml(item.model)}</strong></td>
+      <td>${escapeHtml(item.provider)}</td>
+      <td>${Number(item.request_count).toLocaleString()}</td>
+      <td>${Number(item.input_tokens).toLocaleString()}</td>
+      <td>${Number(item.output_tokens).toLocaleString()}</td>
+      <td>${Number(item.total_tokens).toLocaleString()}</td>
+      <td><div class="usage-model-bar" title="${Number(item.percentage).toFixed(2)}%"><span style="width:${Math.min(100, Number(item.percentage || 0))}%"></span></div></td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+function renderUsageAnalytics() {
+  const data = state.usageAnalytics;
+  if (!data) return;
+  renderUsageOverview(data);
+  renderUsageModels(data);
+  elements.usageOverviewPanel.hidden = state.usageView !== "overview";
+  elements.usageModelsPanel.hidden = state.usageView !== "models";
+}
+
+async function loadUsageAnalytics() {
+  if (!state.accessToken || !apiBase()) return;
+  elements.usageSummaryText.textContent = "正在加载用量数据…";
+  try {
+    state.usageAnalytics = await fetchJson(`${apiBase()}/auth/llm-usage/analytics?period=${encodeURIComponent(state.usagePeriod)}`);
+    renderUsageAnalytics();
+  } catch (error) {
+    elements.usageSummaryText.textContent = `用量数据加载失败：${error.message}`;
+  }
+}
+
+function setTaskCenterMessage(message = "", level = "error") {
+  elements.taskCenterMessage.hidden = !message;
+  elements.taskCenterMessage.textContent = message;
+  elements.taskCenterMessage.className = `auth-message ${level}`;
+}
+
+function renderBaselineOptions() {
+  const selected = elements.baselineTaskSelect.value;
+  const options = state.baselineTasks
+    .filter((task) => task.status === "completed" && task.id !== state.taskId)
+    .map((task) => `<option value="${escapeHtml(task.id)}">${escapeHtml(task.task_name)} · ${new Date(task.created_at).toLocaleString()}</option>`)
+    .join("");
+  elements.baselineTaskSelect.innerHTML = `<option value="">完整审计（无基线）</option>${options}`;
+  if ([...elements.baselineTaskSelect.options].some((item) => item.value === selected)) {
+    elements.baselineTaskSelect.value = selected;
+  }
+}
+
+function renderTaskTable() {
+  renderBaselineOptions();
+  if (!state.tasks.length) {
+    state.selectedTaskIds.clear();
+    elements.taskTable.className = "empty";
+    elements.taskTable.innerHTML = "<strong>暂无审计任务</strong><span>上传源码后会在这里形成任务记录。</span>";
+    updateBulkDeleteState();
+    return;
+  }
+  elements.taskTable.className = "table-wrap";
+  elements.taskTable.innerHTML = `
+    <table class="data-table">
+      <thead><tr><th><input id="selectAllTasks" type="checkbox" aria-label="选择当前页可删除任务"></th><th>任务</th><th>状态</th><th>技术栈</th><th>发现</th><th>时间</th><th>操作</th></tr></thead>
+      <tbody>${state.tasks.map((task) => {
+        const active = ["queued", "running"].includes(task.status);
+        const retryable = ["failed", "stopped"].includes(task.status);
+        const checked = state.selectedTaskIds.has(task.id);
+        return `<tr>
+          <td><input type="checkbox" data-task-select="${escapeHtml(task.id)}" ${checked ? "checked" : ""} ${active ? "disabled" : ""} aria-label="选择 ${escapeHtml(task.task_name)}"></td>
+          <td><strong>${escapeHtml(task.task_name)}</strong><br><span class="helper-text">${escapeHtml(task.id)}</span></td>
+          <td><span class="chip">${escapeHtml(task.status)}</span>${task.retry_count ? `<br><small>重试 ${task.retry_count}</small>` : ""}</td>
+          <td>${escapeHtml([task.language, task.framework].filter(Boolean).join(" / ") || "-")}</td>
+          <td>${Number(task.finding_count || 0)}</td>
+          <td>${new Date(task.created_at).toLocaleString()}</td>
+          <td><div class="table-actions">
+            <button class="ghost compact" data-task-action="view" data-task-id="${escapeHtml(task.id)}" type="button">查看</button>
+            <button class="ghost compact" data-task-action="rename" data-task-id="${escapeHtml(task.id)}" type="button">重命名</button>
+            <button class="secondary compact" data-task-action="retry" data-task-id="${escapeHtml(task.id)}" type="button" ${retryable ? "" : "disabled"}>重试</button>
+            <button class="ghost compact" data-task-action="compare" data-task-id="${escapeHtml(task.id)}" data-baseline-id="${escapeHtml(task.baseline_task_id || "")}" type="button" ${task.baseline_task_id ? "" : "disabled"}>对比</button>
+            <button class="danger-action compact" data-task-action="delete" data-task-id="${escapeHtml(task.id)}" type="button" ${active ? "disabled" : ""}>删除</button>
+          </div></td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table>`;
+  updateBulkDeleteState();
+}
+
+function updateBulkDeleteState() {
+  const count = state.selectedTaskIds.size;
+  elements.bulkDeleteTasksBtn.disabled = count === 0;
+  elements.bulkDeleteTasksBtn.textContent = count ? `批量删除（${count}）` : "批量删除";
+  const boxes = [...elements.taskTable.querySelectorAll("[data-task-select]:not(:disabled)")];
+  const selectAll = elements.taskTable.querySelector("#selectAllTasks");
+  if (selectAll) {
+    selectAll.checked = boxes.length > 0 && boxes.every((box) => box.checked);
+    selectAll.indeterminate = boxes.some((box) => box.checked) && !selectAll.checked;
+  }
+}
+
+async function loadTasks() {
+  const base = requireApiBase("tasks");
+  if (!base || !state.accessToken) return;
+  const params = new URLSearchParams({ page: "1", page_size: "100" });
+  if (elements.taskStatusFilter.value) params.set("status", elements.taskStatusFilter.value);
+  if (elements.taskSearchInput.value.trim()) params.set("search", elements.taskSearchInput.value.trim());
+  try {
+    const payload = await fetchJson(`${base}/audit/tasks?${params}`);
+    state.tasks = payload.items || [];
+    const deletable = new Set(state.tasks.filter((task) => !["queued", "running"].includes(task.status)).map((task) => task.id));
+    state.selectedTaskIds = new Set([...state.selectedTaskIds].filter((taskId) => deletable.has(taskId)));
+    if (!elements.taskStatusFilter.value && !elements.taskSearchInput.value.trim()) {
+      state.baselineTasks = state.tasks;
+    } else {
+      const allTasks = await fetchJson(`${base}/audit/tasks?page=1&page_size=100`);
+      state.baselineTasks = allTasks.items || [];
+    }
+    renderTaskTable();
+    setTaskCenterMessage("");
+  } catch (error) {
+    setTaskCenterMessage(error.message);
+  }
+}
+
+async function initializeWorkspaceTasks() {
+  await loadTasks();
+  if (!state.taskId && !state.workspaceStateFound && state.baselineTasks.length) {
+    rememberTask(state.baselineTasks[0].id, state.baselineTasks[0].status);
+  }
+  if (!state.taskId) return;
+  const taskExists = state.baselineTasks.some((task) => task.id === state.taskId);
+  if (!taskExists) {
+    clearTaskWorkspace(state.taskId);
+    return;
+  }
+  await loadTaskResult();
+  if (["queued", "running"].includes(state.taskStatus)) {
+    connectSocket(state.taskId);
+    beginPolling();
+  }
+}
+
+async function openTask(taskId) {
+  rememberTask(taskId, "loading");
+  await loadTaskResult();
+  if (["queued", "running"].includes(state.taskStatus)) {
+    connectSocket(taskId);
+    beginPolling();
+  }
+  setMainView("workspace");
+  document.getElementById("workspace")?.scrollIntoView({ behavior: "smooth" });
+}
+
+async function renameTask(taskId) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  const taskName = window.prompt("新的任务名称", task?.task_name || "");
+  if (!taskName?.trim()) return;
+  await fetchJson(`${apiBase()}/audit/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_name: taskName.trim() }),
+  });
+  await loadTasks();
+}
+
+async function retryTask(taskId) {
+  const payload = await fetchJson(`${apiBase()}/audit/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
+  await openTask(payload.task_id);
+  await loadTasks();
+}
+
+async function deleteTask(taskId) {
+  await fetchJson(`${apiBase()}/audit/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+  clearTaskWorkspace(taskId);
+  await loadTasks();
+}
+
+async function bulkDeleteTasks() {
+  const taskIds = [...state.selectedTaskIds];
+  if (!taskIds.length) return;
+  const result = await fetchJson(`${apiBase()}/audit/tasks/bulk-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ task_ids: taskIds }),
+  });
+  result.deleted_ids.forEach((taskId) => clearTaskWorkspace(taskId));
+  state.selectedTaskIds.clear();
+  await loadTasks();
+  setTaskCenterMessage(
+    `已删除 ${result.deleted_ids.length} 个任务${result.skipped_ids.length ? `，跳过 ${result.skipped_ids.length} 个活动任务` : ""}。`,
+    "ok",
+  );
+}
+
+function setMainView(view) {
+  const taskMode = view === "tasks";
+  const llmMode = view === "llm";
+  elements.mainContent.classList.toggle("task-center-mode", taskMode);
+  elements.mainContent.classList.toggle("llm-settings-mode", llmMode);
+  document.querySelectorAll(".side-nav-item[data-view]").forEach((item) => {
+    item.classList.toggle("active", item.dataset.view === view && (taskMode || llmMode || item.getAttribute("href") === "#workspace"));
+  });
+  elements.pageEyebrow.textContent = taskMode ? "// TASK CENTER" : llmMode ? "// MODEL SETTINGS" : "// OVERVIEW";
+  elements.pageTitle.innerHTML = `${taskMode ? "任务中心" : llmMode ? "模型配置" : "安全审计工作台"}<span class="terminal-cursor" aria-hidden="true"></span>`;
+  elements.pageSubtitle.textContent = taskMode
+    ? "$ 集中管理、筛选和批量清理审计任务。"
+    : llmMode
+      ? "$ 管理当前账户的模型平台、凭据、用量与登录会话。"
+      : "$ 提交代码、跟踪任务并处理风险发现。";
+  if (taskMode) void loadTasks();
+  if (llmMode) {
+    void loadLlmConfig();
+    void loadUsageAnalytics();
+    void loadSessions();
+  }
+}
+
+async function compareTask(taskId, baselineId) {
+  const data = await fetchJson(`${apiBase()}/audit/${encodeURIComponent(taskId)}/compare/${encodeURIComponent(baselineId)}`);
+  setTaskCenterMessage(
+    `增量对比：新增 ${data.new_findings.length}，未变化 ${data.unchanged_findings.length}，已解决 ${data.resolved_findings.length}，变更文件 ${data.changed_files.length}。`,
+    "ok",
+  );
+}
+
+function renderSessions(sessions) {
+  elements.sessionsTable.innerHTML = sessions.length ? `<table class="data-table">
+    <thead><tr><th>设备</th><th>IP</th><th>最近活动</th><th>到期时间</th><th>操作</th></tr></thead>
+    <tbody>${sessions.map((session) => `<tr>
+      <td>${escapeHtml(session.user_agent || "未知设备")} ${session.current ? '<span class="badge ok">当前</span>' : ""}</td>
+      <td>${escapeHtml(session.ip_address || "-")}</td>
+      <td>${new Date(session.last_seen_at).toLocaleString()}</td>
+      <td>${new Date(session.expires_at).toLocaleString()}</td>
+      <td><button class="ghost compact" data-session-id="${escapeHtml(session.id)}" type="button">撤销</button></td>
+    </tr>`).join("")}</tbody></table>` : '<div class="empty">暂无活动会话。</div>';
+}
+
+async function loadSessions() {
+  if (!state.accessToken) return;
+  try {
+    renderSessions(await fetchJson(`${apiBase()}/auth/sessions`));
+  } catch (error) {
+    elements.sessionsTable.textContent = error.message;
+  }
+}
+
+async function revokeSession(sessionId) {
+  await fetchJson(`${apiBase()}/auth/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  await loadSessions();
+}
+
 function showAuth(message = "") {
   stopPolling();
   closeSocket();
@@ -724,9 +1141,10 @@ function withAccessToken(url) {
 function appendLog(message) {
   const stamped = `[${new Date().toLocaleTimeString()}] ${message}`;
   state.logs.push(stamped);
-  state.logs = state.logs.slice(-180);
-  elements.logBox.textContent = state.logs.join("\n");
-  elements.logBox.scrollTop = elements.logBox.scrollHeight;
+  state.logs = state.logs.slice(-WORKSPACE_LOG_LIMIT);
+  state.logsByTask[taskLogKey()] = state.logs;
+  renderTaskLogs();
+  persistWorkspaceState();
 }
 
 function setText(element, value) {
@@ -780,6 +1198,13 @@ function clearUploadSelection() {
   updateUploadSelectionText();
 }
 
+function setUploadMessage(message, level = "error") {
+  if (!elements.uploadMessage) return;
+  elements.uploadMessage.hidden = !message;
+  elements.uploadMessage.textContent = message || "";
+  elements.uploadMessage.className = message ? `auth-message upload-message ${level}` : "auth-message upload-message";
+}
+
 function setBadge(element, text, level) {
   if (!element) {
     return;
@@ -804,6 +1229,7 @@ function setTaskMeta() {
           ? "warn"
           : "neutral"
   }`;
+  persistWorkspaceState();
 }
 
 function renderTop10(findings) {
@@ -870,19 +1296,21 @@ function renderFindings(findings) {
       .join("");
 
     return `
-      <article class="finding-card">
+      <article class="finding-card is-collapsed">
         <div class="finding-header">
-          <span class="severity-pill severity-${severity}">${escapeHtml(item.severity)}</span>
+          <span class="severity-pill severity-${severity}">${escapeHtml(localizeFindingSeverity(item.severity))}</span>
           <span class="chip">${escapeHtml(item.owasp_label || "未分类")}</span>
-          <span class="chip">${escapeHtml(item.source || "Unknown")}</span>
+          <span class="chip">${escapeHtml(localizeFindingSource(item.source))}</span>
+          <button class="ghost compact finding-toggle" data-finding-toggle type="button" aria-expanded="false">展开详情</button>
         </div>
-        <h3>${escapeHtml(item.title)}</h3>
-        <p>${escapeHtml(item.description)}</p>
+        <h3>${escapeHtml(localizeFindingTitle(item.title))}</h3>
+        <p>${escapeHtml(localizeFindingDescription(item.description))}</p>
         <div class="finding-meta">
           <span>位置: ${escapeHtml(item.file_path)}:${escapeHtml(item.line_number)}</span>
           <span>CWE: ${escapeHtml(item.cwe_id || "N/A")}</span>
           <span>CVSS: ${escapeHtml(item.cvss_score)}</span>
         </div>
+        <div class="finding-detail-body" hidden>
         <div class="detail-grid">
           <section class="detail-block">
             <h4>影响</h4>
@@ -923,6 +1351,7 @@ function renderFindings(findings) {
             ? `<div class="detail-block"><h4>参考资料</h4><ul class="reference-list">${references}</ul></div>`
             : ""
         }
+        </div>
       </article>
     `;
   }).join("");
@@ -1092,25 +1521,37 @@ async function submitRegister(event) {
   }
 }
 
-function logout() {
-  clearSession();
-  state.taskId = null;
-  state.taskStatus = "未开始";
-  state.progress = 0;
-  state.logs = ["[system] 等待任务开始..."];
-  elements.logBox.textContent = state.logs.join("\n");
-  elements.reportWrap.hidden = true;
-  elements.reportWrap.className = "";
-  elements.reportWrap.innerHTML = "";
-  setTaskMeta();
-  renderFindings([]);
-  showAuth();
+async function logout() {
+  try {
+    if (state.accessToken && apiBase()) {
+      await fetchJson(`${apiBase()}/auth/logout`, { method: "POST" });
+    }
+  } catch {
+    // Local sign-out still clears the browser credential if the API is offline.
+  } finally {
+    clearSession();
+    state.taskId = null;
+    state.taskStatus = "未开始";
+    state.progress = 0;
+    state.logs = ["[system] 等待任务开始..."];
+    elements.logBox.textContent = state.logs.join("\n");
+    elements.reportWrap.hidden = true;
+    elements.reportWrap.className = "";
+    elements.reportWrap.innerHTML = "";
+    setTaskMeta();
+    renderFindings([]);
+    showAuth();
+  }
 }
 
 function rememberTask(taskId, status) {
+  state.logsByTask[taskLogKey()] = state.logs.slice(-WORKSPACE_LOG_LIMIT);
   state.taskId = taskId;
   state.taskStatus = status;
   state.progress = 0;
+  const savedLogs = state.logsByTask[taskLogKey(taskId)];
+  state.logs = Array.isArray(savedLogs) && savedLogs.length ? savedLogs : defaultTaskLogs(taskId);
+  renderTaskLogs();
   renderFindings([]);
   elements.reportWrap.hidden = true;
   elements.reportWrap.className = "";
@@ -1121,6 +1562,7 @@ function rememberTask(taskId, status) {
 async function uploadFile() {
   const files = getSelectedUploads();
   if (!files.length) {
+    setUploadMessage("请先选择源码文件、压缩包或目录。", "error");
     appendLog("[upload] 请先选择要上传的任意文件、压缩包或目录");
     return;
   }
@@ -1133,6 +1575,8 @@ async function uploadFile() {
 
   try {
     elements.uploadBtn.disabled = true;
+    elements.uploadBtn.textContent = "上传中...";
+    setUploadMessage("正在上传源码，请稍候…", "ok");
     const base = requireApiBase("upload");
     if (!base) {
       return;
@@ -1142,12 +1586,16 @@ async function uploadFile() {
       body: form,
     });
     rememberTask(data.task_id, data.status);
+    setUploadMessage(`上传成功，任务 ${data.task_id.slice(0, 8)} 已创建，现在可以启动审计。`, "ok");
     appendLog(`[upload] 已上传 ${data.upload_count || files.length} 个文件，task_id=${data.task_id}`);
     clearUploadSelection();
+    await loadTasks();
   } catch (error) {
+    setUploadMessage(`上传失败：${error.message}`, "error");
     appendLog(`[upload] ${error.message}`);
   } finally {
     elements.uploadBtn.disabled = false;
+    elements.uploadBtn.textContent = "上传源码";
   }
 }
 
@@ -1157,6 +1605,7 @@ async function uploadDemoProject() {
 
   try {
     elements.demoBtn.disabled = true;
+    setUploadMessage("正在导入示例项目…", "ok");
     const base = requireApiBase("demo");
     if (!base) {
       return;
@@ -1166,8 +1615,11 @@ async function uploadDemoProject() {
       body: form,
     });
     rememberTask(data.task_id, data.status);
+    setUploadMessage("示例项目导入成功，现在可以启动审计。", "ok");
     appendLog(`[demo] 已导入示例项目 ${data.upload_name}，task_id=${data.task_id}`);
+    await loadTasks();
   } catch (error) {
+    setUploadMessage(`示例项目导入失败：${error.message}`, "error");
     appendLog(`[demo] ${error.message}`);
   } finally {
     elements.demoBtn.disabled = false;
@@ -1231,8 +1683,13 @@ async function loadTaskResult() {
     if (task.status === "completed") {
       renderReports(task.id);
       stopPolling();
+      await loadTasks();
     } else if (task.status === "failed" || task.status === "stopped") {
+      if (task.status === "failed" && task.error_message) {
+        appendLog(`[audit] 任务失败：${task.error_message}`);
+      }
       stopPolling();
+      await loadTasks();
     }
   } catch (error) {
     appendLog(`[result] ${error.message}`);
@@ -1260,7 +1717,10 @@ async function startAudit() {
     const payload = await fetchJson(`${base}/audit/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_id: state.taskId }),
+      body: JSON.stringify({
+        task_id: state.taskId,
+        ...(elements.baselineTaskSelect.value ? { baseline_task_id: elements.baselineTaskSelect.value } : {}),
+      }),
     });
     state.taskStatus = payload.status;
     state.progress = 5;
@@ -1311,6 +1771,20 @@ elements.llmBaseUrlInput?.addEventListener("change", () => void discoverLlmModel
 elements.llmApiKeyInput?.addEventListener("change", () => void discoverLlmModels());
 elements.discoverLlmModelsBtn?.addEventListener("click", () => void discoverLlmModels());
 elements.clearLlmApiKeyBtn?.addEventListener("click", clearLlmApiKey);
+document.querySelectorAll("[data-usage-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.usageView = button.dataset.usageView;
+    document.querySelectorAll("[data-usage-view]").forEach((item) => item.classList.toggle("active", item === button));
+    renderUsageAnalytics();
+  });
+});
+document.querySelectorAll("[data-usage-period]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.usagePeriod = button.dataset.usagePeriod;
+    document.querySelectorAll("[data-usage-period]").forEach((item) => item.classList.toggle("active", item === button));
+    void loadUsageAnalytics();
+  });
+});
 elements.pickFolderBtn?.addEventListener("click", () => elements.folderInput.click());
 elements.fileInput?.addEventListener("change", updateUploadSelectionText);
 elements.folderInput?.addEventListener("change", updateUploadSelectionText);
@@ -1319,6 +1793,66 @@ elements.demoBtn?.addEventListener("click", uploadDemoProject);
 elements.startBtn?.addEventListener("click", startAudit);
 elements.docsBtn?.addEventListener("click", openDocs);
 elements.refreshHealthBtn?.addEventListener("click", refreshHealth);
+elements.refreshTasksBtn?.addEventListener("click", loadTasks);
+elements.taskStatusFilter?.addEventListener("change", loadTasks);
+let taskSearchTimer = null;
+elements.taskSearchInput?.addEventListener("input", () => {
+  window.clearTimeout(taskSearchTimer);
+  taskSearchTimer = window.setTimeout(loadTasks, 250);
+});
+elements.taskTable?.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-task-action]");
+  if (!target || target.disabled) return;
+  const taskId = target.dataset.taskId;
+  const action = target.dataset.taskAction;
+  const run = action === "view" ? openTask(taskId)
+    : action === "rename" ? renameTask(taskId)
+      : action === "retry" ? retryTask(taskId)
+        : action === "compare" ? compareTask(taskId, target.dataset.baselineId)
+          : action === "delete" && window.confirm("删除该任务及其报告文件？") ? deleteTask(taskId) : null;
+  if (run) run.catch((error) => setTaskCenterMessage(error.message));
+});
+elements.taskTable?.addEventListener("change", (event) => {
+  if (event.target.id === "selectAllTasks") {
+    elements.taskTable.querySelectorAll("[data-task-select]:not(:disabled)").forEach((box) => {
+      box.checked = event.target.checked;
+      if (box.checked) state.selectedTaskIds.add(box.dataset.taskSelect);
+      else state.selectedTaskIds.delete(box.dataset.taskSelect);
+    });
+    updateBulkDeleteState();
+    return;
+  }
+  const box = event.target.closest("[data-task-select]");
+  if (!box) return;
+  if (box.checked) state.selectedTaskIds.add(box.dataset.taskSelect);
+  else state.selectedTaskIds.delete(box.dataset.taskSelect);
+  updateBulkDeleteState();
+});
+elements.findingsWrap?.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-finding-toggle]");
+  if (!toggle) return;
+  const card = toggle.closest(".finding-card");
+  const body = card?.querySelector(".finding-detail-body");
+  if (!card || !body) return;
+  const expanded = toggle.getAttribute("aria-expanded") === "true";
+  toggle.setAttribute("aria-expanded", String(!expanded));
+  toggle.textContent = expanded ? "展开详情" : "收起详情";
+  body.hidden = expanded;
+  card.classList.toggle("is-collapsed", expanded);
+});
+elements.bulkDeleteTasksBtn?.addEventListener("click", () => {
+  if (state.selectedTaskIds.size && window.confirm(`删除选中的 ${state.selectedTaskIds.size} 个任务及其报告文件？`)) {
+    bulkDeleteTasks().catch((error) => setTaskCenterMessage(error.message));
+  }
+});
+document.querySelectorAll(".side-nav-item[data-view]").forEach((item) => {
+  item.addEventListener("click", () => setMainView(item.dataset.view));
+});
+elements.refreshSessionsBtn?.addEventListener("click", loadSessions);
+elements.sessionsTable?.addEventListener("click", (event) => {
+  const target = event.target.closest("[data-session-id]");
+  if (target) revokeSession(target.dataset.sessionId).catch((error) => setLlmConfigMessage(error.message));
+});
 
 window.addEventListener("beforeunload", () => {
   stopPolling();
@@ -1330,4 +1864,5 @@ setTaskMeta();
 renderTop10([]);
 updateUploadSelectionText();
 resetRegisterSlider();
+setMainView(window.location.hash === "#taskCenter" ? "tasks" : window.location.hash === "#llmSettings" ? "llm" : "workspace");
 restoreSession();

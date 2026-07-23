@@ -44,3 +44,5 @@ class AuditState(TypedDict):
     report_paths: dict[str, str]
     status: str
     logs: list[str]
+    baseline_project_path: str
+    changed_files: list[str]

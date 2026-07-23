@@ -39,11 +39,56 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from backend.app.models import AuditTask, Finding, User, UserLLMConfig  # noqa: F401
+    from backend.app.models import AdminAuditLog, AuditTask, AuthSession, Finding, LLMUsage, User, UserLLMConfig  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_auth_columns()
+    _ensure_runtime_columns()
     _ensure_bootstrap_admin()
+
+
+def _ensure_runtime_columns() -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    statements: list[str] = []
+    if "audit_tasks" in tables:
+        inspected_task_columns = inspector.get_columns("audit_tasks")
+        task_columns = {column["name"] for column in inspected_task_columns}
+        additions = {
+            "baseline_task_id": "VARCHAR(36)",
+            "changed_files_json": "LONGTEXT" if engine.dialect.name == "mysql" else "TEXT",
+            "source_digest": "VARCHAR(64)",
+            "retry_count": "INTEGER NOT NULL DEFAULT 0",
+            "error_message": "TEXT",
+            "queued_at": "DATETIME",
+        }
+        statements.extend(
+            f"ALTER TABLE audit_tasks ADD COLUMN {name} {definition}"
+            for name, definition in additions.items()
+            if name not in task_columns
+        )
+        changed_files_column = next(
+            (column for column in inspected_task_columns if column["name"] == "changed_files_json"),
+            None,
+        )
+        if (
+            engine.dialect.name == "mysql"
+            and changed_files_column is not None
+            and "LONGTEXT" not in str(changed_files_column["type"]).upper()
+        ):
+            statements.append(
+                "ALTER TABLE audit_tasks MODIFY COLUMN changed_files_json LONGTEXT NULL"
+            )
+    if "user_llm_configs" in tables:
+        config_columns = {column["name"] for column in inspector.get_columns("user_llm_configs")}
+        if "monthly_token_limit" not in config_columns:
+            statements.append(
+                "ALTER TABLE user_llm_configs ADD COLUMN monthly_token_limit INTEGER NOT NULL DEFAULT 1000000"
+            )
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
 
 
 def _ensure_auth_columns() -> None:
@@ -59,6 +104,10 @@ def _ensure_auth_columns() -> None:
             connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) NOT NULL DEFAULT 'user'"))
         if "is_active" not in columns:
             connection.execute(text("ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"))
+        if "monthly_token_limit" not in columns:
+            connection.execute(
+                text("ALTER TABLE users ADD COLUMN monthly_token_limit INTEGER NOT NULL DEFAULT 1000000")
+            )
 
 
 def _ensure_bootstrap_admin() -> None:

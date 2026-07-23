@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#03070b" />
     <title>AuditPilot · 用户管理</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=refactor-20260723-models" />
+    <link rel="stylesheet" href="./assets/styles.css?v=admin-pages-20260723" />
   </head>
   <body class="admin-page">
     <a class="skip-link" href="#adminApp">跳到主要内容</a>
@@ -16,7 +16,15 @@
           <div class="brand-mark" aria-hidden="true">&gt;_</div>
           <div><strong>AuditPilot</strong><p>Administration</p></div>
         </a>
-        <div class="admin-header-title"><span class="eyebrow">// ADMINISTRATION</span><h1>用户与任务管理<span class="terminal-cursor" aria-hidden="true"></span></h1></div>
+        <div class="admin-header-title">
+          <span class="eyebrow">// ADMINISTRATION</span>
+          <h1>用户管理<span class="terminal-cursor" aria-hidden="true"></span></h1>
+          <nav class="admin-nav" aria-label="管理页面">
+            <a class="active" href="./admin.html">用户</a>
+            <a href="./admin-tasks.html">任务</a>
+            <a href="./admin-logs.html">操作日志</a>
+          </nav>
+        </div>
         <div class="admin-header-actions"><span id="adminIdentity" class="chip">-</span><a class="link-button ghost" href="./index.html">返回工作台</a><button id="adminLogoutBtn" class="ghost" type="button">退出登录</button></div>
       </header>
 
@@ -25,14 +33,6 @@
           <div class="panel-header"><div><span class="section-label">Accounts</span><h2>用户列表</h2></div><button id="refreshUsersBtn" class="ghost compact" type="button">刷新数据</button></div>
           <div id="adminMessage" class="auth-message" role="status" hidden></div>
           <div id="usersTable" class="table-wrap"></div>
-        </section>
-        <section class="panel">
-          <div class="panel-header"><div><span class="section-label">Audit jobs</span><h2>用户任务</h2></div><span id="selectedUserLabel" class="chip">未选择用户</span></div>
-          <div id="tasksTable" class="table-wrap empty"><strong>请选择一个用户</strong><span>所选用户的审计任务会显示在这里。</span></div>
-        </section>
-        <section class="panel admin-detail-panel">
-          <div class="panel-header"><div><span class="section-label">Task detail</span><h2>审计结果</h2></div><span class="chip">Admin view</span></div>
-          <div id="adminTaskDetail" class="empty"><strong>请选择一个任务</strong><span>任务详情和漏洞发现会显示在这里。</span></div>
         </section>
       </main>
 
@@ -43,7 +43,7 @@
         </div>
       </section>
     </div>
-    <script src="./assets/runtime-config.js?v=refactor-20260723-models"></script>
-    <script type="module" src="./assets/admin.js?v=refactor-20260723-models"></script>
+    <script src="./assets/runtime-config.js?v=admin-pages-20260723"></script>
+    <script type="module" src="./assets/admin.js?v=admin-pages-20260723"></script>
   </body>
 </html>

@@ -8,13 +8,14 @@ from pathlib import Path
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-os.environ["DATABASE_URL"] = f"sqlite:///./tmp/user-llm-stop-{uuid4().hex}.db"
+TEST_DB_PATH = Path("tmp") / f"user-llm-stop-{uuid4().hex}.db"
+os.environ["DATABASE_URL"] = f"sqlite:///./{TEST_DB_PATH.as_posix()}"
 os.environ["AUTH_SECRET_KEY"] = "test-auth-secret-for-user-config"
 os.environ["CREDENTIAL_ENCRYPTION_KEY"] = "test-encryption-secret-for-user-config"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from backend.app.core.database import SessionLocal  # noqa: E402
+from backend.app.core.database import SessionLocal, engine  # noqa: E402
 from backend.app.main import app  # noqa: E402
 from backend.app.models import AuditTask, UserLLMConfig  # noqa: E402
 from backend.app.services.auth_service import create_access_token, create_user  # noqa: E402
@@ -54,8 +55,8 @@ def main() -> None:
             other_user = create_user(db, "other-user", "other-user@example.local", "Password-123")
             db.add(AuditTask(id="task-stop-test", user_id=user.id, task_name="running task", status="running"))
             db.commit()
-            admin_headers = {"Authorization": f"Bearer {create_access_token(admin)}"}
-            user_headers = {"Authorization": f"Bearer {create_access_token(user)}"}
+            admin_headers = {"Authorization": f"Bearer {create_access_token(admin, db)}"}
+            user_headers = {"Authorization": f"Bearer {create_access_token(user, db)}"}
         finally:
             db.close()
 
@@ -100,7 +101,11 @@ def main() -> None:
         assert response.status_code == 200, response.text
         assert response.json()["models"] == ["model-alpha", "model-beta"], response.text
 
-        other_headers = {"Authorization": f"Bearer {create_access_token(other_user)}"}
+        db = SessionLocal()
+        try:
+            other_headers = {"Authorization": f"Bearer {create_access_token(other_user, db)}"}
+        finally:
+            db.close()
         response = client.get("/api/v1/auth/llm-config", headers=other_headers)
         assert response.status_code == 200 and response.json()["api_key_configured"] is False, response.text
 
@@ -117,6 +122,41 @@ def main() -> None:
         response = client.get(f"/api/v1/admin/users/{user.id}/tasks", headers=admin_headers)
         assert response.status_code == 200 and response.json()[0]["status"] == "stopped", response.text
 
+        response = client.patch(
+            f"/api/v1/admin/users/{user.id}/llm-quota",
+            headers=admin_headers,
+            json={"monthly_token_limit": 123456},
+        )
+        assert response.status_code == 200 and response.json()["monthly_token_limit"] == 123456, response.text
+        response = client.get("/api/v1/auth/sessions", headers=user_headers)
+        assert response.status_code == 200 and len(response.json()) == 1, response.text
+        db = SessionLocal()
+        try:
+            db.add_all(
+                [
+                    AuditTask(id="bulk-delete-ready", user_id=user.id, task_name="delete me", status="completed"),
+                    AuditTask(id="bulk-delete-active", user_id=user.id, task_name="keep me", status="running"),
+                ]
+            )
+            db.commit()
+        finally:
+            db.close()
+        response = client.post(
+            "/api/v1/audit/tasks/bulk-delete",
+            headers=user_headers,
+            json={"task_ids": ["bulk-delete-ready", "bulk-delete-active", "missing-task"]},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["deleted_ids"] == ["bulk-delete-ready"], response.text
+        assert response.json()["skipped_ids"] == ["bulk-delete-active", "missing-task"], response.text
+        response = client.post(f"/api/v1/admin/users/{user.id}/sessions/revoke", headers=admin_headers)
+        assert response.status_code == 204, response.text
+        assert client.get("/api/v1/auth/me", headers=user_headers).status_code == 401
+        response = client.get("/api/v1/admin/audit-logs", headers=admin_headers)
+        assert response.status_code == 200 and len(response.json()) >= 3, response.text
+
+    engine.dispose()
+    TEST_DB_PATH.unlink(missing_ok=True)
     print("User LLM configuration and admin task-stop integration test passed.")
 
 

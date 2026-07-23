@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#03070b" />
     <title>AuditPilot · 代码安全审计工作台</title>
-    <link rel="stylesheet" href="./assets/styles.css?v=refactor-20260723-models" />
+    <link rel="stylesheet" href="./assets/styles.css?v=platform-20260723-analytics" />
   </head>
   <body>
     <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -90,10 +90,11 @@
         </div>
 
         <nav class="side-nav" aria-label="页面导航">
-          <a class="side-nav-item active" href="#workspace"><span aria-hidden="true">⌁</span>审计工作台</a>
-          <a class="side-nav-item" href="#llmSettings"><span aria-hidden="true">⌘</span>模型配置</a>
-          <a class="side-nav-item" href="#findings"><span aria-hidden="true">◇</span>风险发现</a>
-          <a class="side-nav-item" href="#reports"><span aria-hidden="true">↧</span>审计报告</a>
+          <a class="side-nav-item active" href="#workspace" data-view="workspace"><span aria-hidden="true">⌁</span>审计工作台</a>
+          <a class="side-nav-item" href="#taskCenter" data-view="tasks"><span aria-hidden="true">☷</span>任务中心</a>
+          <a class="side-nav-item" href="#llmSettings" data-view="llm"><span aria-hidden="true">⌘</span>模型配置</a>
+          <a class="side-nav-item" href="#findings" data-view="workspace"><span aria-hidden="true">◇</span>风险发现</a>
+          <a class="side-nav-item" href="#reports" data-view="workspace"><span aria-hidden="true">↧</span>审计报告</a>
           <a id="adminPageLink" class="side-nav-item" href="./admin.html" hidden><span aria-hidden="true">◎</span>用户管理</a>
         </nav>
 
@@ -119,8 +120,8 @@
 
       <main id="mainContent" class="surface">
         <header class="topbar">
-          <div><span class="eyebrow">// OVERVIEW</span><h1>安全审计工作台<span class="terminal-cursor" aria-hidden="true"></span></h1><p>$ 提交代码、跟踪任务并处理风险发现。</p></div>
-          <div class="topbar-actions"><button id="docsBtn" class="ghost" type="button">API 文档</button><button id="startBtn" class="primary" type="button" disabled>启动审计</button></div>
+          <div><span id="pageEyebrow" class="eyebrow">// OVERVIEW</span><h1 id="pageTitle">安全审计工作台<span class="terminal-cursor" aria-hidden="true"></span></h1><p id="pageSubtitle">$ 提交代码、跟踪任务并处理风险发现。</p></div>
+          <div class="topbar-actions"><button id="docsBtn" class="ghost" type="button">API 文档</button></div>
         </header>
 
         <section class="hero-stats" aria-label="风险统计">
@@ -136,6 +137,7 @@
             <div class="grid">
               <label class="field"><span>任务名称</span><input id="taskNameInput" type="text" value="separated-web-audit" /></label>
               <label class="field"><span>后端 API 地址</span><input id="apiBaseInput" type="url" placeholder="从 .env 读取" /></label>
+              <label class="field"><span>增量审计基线</span><select id="baselineTaskSelect"><option value="">完整审计（无基线）</option></select></label>
             </div>
             <div class="upload-zone">
               <div class="upload-icon" aria-hidden="true">↑</div>
@@ -147,7 +149,8 @@
                 <button id="pickFolderBtn" class="ghost" type="button">选择目录</button>
               </div>
             </div>
-            <div class="actions"><button id="uploadBtn" class="secondary" type="button">上传源码</button><button id="demoBtn" class="ghost" type="button">使用示例项目</button></div>
+            <div class="actions"><button id="uploadBtn" class="secondary" type="button">上传源码</button><button id="startBtn" class="primary" type="button" disabled>启动审计</button><button id="demoBtn" class="ghost" type="button">使用示例项目</button></div>
+            <div id="uploadMessage" class="auth-message upload-message" role="status" hidden></div>
           </article>
 
           <article class="panel task-panel">
@@ -158,22 +161,57 @@
           </article>
         </section>
 
+        <section id="taskCenter" class="panel">
+          <div class="panel-header">
+            <div><span class="section-label">Task center</span><h2>我的审计任务</h2></div>
+            <div class="actions compact-actions task-toolbar">
+              <button id="bulkDeleteTasksBtn" class="ghost danger-action compact" type="button" disabled>批量删除</button>
+              <select id="taskStatusFilter" aria-label="任务状态筛选"><option value="">全部状态</option><option value="pending">待启动</option><option value="queued">排队中</option><option value="running">运行中</option><option value="completed">已完成</option><option value="failed">失败</option><option value="stopped">已停止</option></select>
+              <input id="taskSearchInput" type="search" placeholder="搜索任务" aria-label="搜索任务" />
+              <button id="refreshTasksBtn" class="ghost compact" type="button">搜索</button>
+            </div>
+          </div>
+          <div id="taskCenterMessage" class="auth-message" role="status" hidden></div>
+          <div id="taskTable" class="table-wrap empty"><span>登录后自动加载任务。</span></div>
+        </section>
+
         <section id="llmSettings" class="panel llm-config-panel" aria-labelledby="llmConfigTitle">
           <div class="panel-header">
             <div><span class="section-label">Personal provider</span><h2 id="llmConfigTitle">我的 LLM API 配置</h2></div>
             <span id="llmConfigStatus" class="badge neutral">未配置</span>
           </div>
+          <section class="usage-dashboard" aria-label="LLM 使用统计">
+            <div class="usage-dashboard-toolbar">
+              <div class="usage-tabs" role="tablist" aria-label="统计视图">
+                <button class="usage-tab active" data-usage-view="overview" type="button">Overview</button>
+                <button class="usage-tab" data-usage-view="models" type="button">Models</button>
+              </div>
+              <div class="usage-periods" aria-label="统计周期">
+                <button class="usage-period active" data-usage-period="all" type="button">All</button>
+                <button class="usage-period" data-usage-period="30d" type="button">30d</button>
+                <button class="usage-period" data-usage-period="7d" type="button">7d</button>
+              </div>
+            </div>
+            <div id="usageOverviewPanel">
+              <div id="usageStatGrid" class="usage-stat-grid"></div>
+              <div id="usageHeatmap" class="usage-heatmap" aria-label="Token 使用热力图"></div>
+              <p id="usageSummaryText" class="usage-summary">正在加载用量数据…</p>
+            </div>
+            <div id="usageModelsPanel" class="usage-models-panel" hidden></div>
+          </section>
           <form id="llmConfigForm" class="llm-config-form">
             <div class="grid">
-              <label class="field"><span>API 平台</span><select id="llmProviderSelect"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option><option value="openai-compatible">OpenAI Compatible / 自定义</option></select></label>
+              <label class="field"><span>API 平台</span><select id="llmProviderSelect"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="azure-openai">Azure OpenAI</option><option value="openai-compatible">OpenAI Compatible / 自定义</option></select></label>
               <label class="field"><span>模型名称</span><input id="llmModelInput" type="text" list="llmModelOptions" maxlength="255" placeholder="填写 Key 后自动识别" required /><datalist id="llmModelOptions"></datalist></label>
               <label class="field"><span>API Base URL</span><input id="llmBaseUrlInput" type="url" maxlength="2048" placeholder="https://api.openai.com/v1" required /></label>
               <label class="field"><span>API Key</span><input id="llmApiKeyInput" type="password" maxlength="4096" autocomplete="off" placeholder="已保存的 Key 不会再次显示；填写后更新" /></label>
             </div>
-            <p class="helper-text">Key 仅用于当前账户的审计任务，服务端加密保存；切换平台时同步修改 Base URL 与模型。</p>
+            <p class="helper-text">Key 仅用于当前账户的审计任务，服务端加密保存；切换平台时同步修改 Base URL 与模型。<strong id="llmUsageLabel">本月用量：0 / 0 tokens</strong></p>
             <div class="actions"><button id="saveLlmConfigBtn" class="primary" type="submit">保存我的 API 配置</button><button id="discoverLlmModelsBtn" class="secondary" type="button">识别可用模型</button><button id="clearLlmApiKeyBtn" class="ghost" type="button">删除已保存的 Key</button></div>
             <div id="llmConfigMessage" class="auth-message" role="status" hidden></div>
           </form>
+          <div class="panel-header subsection-header"><div><span class="section-label">Sessions</span><h3>登录会话</h3></div><button id="refreshSessionsBtn" class="ghost compact" type="button">刷新会话</button></div>
+          <div id="sessionsTable" class="table-wrap"></div>
         </section>
 
         <section class="panel matrix-panel">
@@ -193,7 +231,7 @@
       </main>
     </div>
 
-    <script src="./assets/runtime-config.js?v=refactor-20260723-models"></script>
-    <script type="module" src="./assets/app.js?v=refactor-20260723-models"></script>
+    <script src="./assets/runtime-config.js?v=platform-20260723-analytics"></script>
+    <script type="module" src="./assets/app.js?v=platform-20260723-finding-zh"></script>
   </body>
 </html>

@@ -20,7 +20,7 @@ def _derive_llm_findings(scan_results: list[AuditFinding]) -> list[AuditFinding]
                 {
                     "source": "LLMReview",
                     "severity": "HIGH",
-                    "title": "Untrusted Input Reaches SQL Execution Path",
+                    "title": "不可信输入进入 SQL 执行路径",
                     "description": "该查询路径显示未受信输入可能在未参数化的情况下进入 SQL 执行流程，需要优先人工复核。",
                     "file_path": file_path,
                     "line_number": line_number,
@@ -34,7 +34,7 @@ def _derive_llm_findings(scan_results: list[AuditFinding]) -> list[AuditFinding]
                 {
                     "source": "LLMReview",
                     "severity": "HIGH",
-                    "title": "Possible Remote Command Execution Chain",
+                    "title": "潜在的远程命令执行链",
                     "description": "命令执行点与用户输入处理组合出现时，需要重点确认是否存在可实际利用的 RCE 链路。",
                     "file_path": file_path,
                     "line_number": line_number,
@@ -48,7 +48,7 @@ def _derive_llm_findings(scan_results: list[AuditFinding]) -> list[AuditFinding]
                 {
                     "source": "LLMReview",
                     "severity": "MEDIUM",
-                    "title": "Credential Exposure and Authentication Weakness",
+                    "title": "凭据泄露与身份认证薄弱",
                     "description": "硬编码凭据或弱认证处理会扩大泄露后的影响范围，也会增加后续轮换和修复成本。",
                     "file_path": file_path,
                     "line_number": line_number,
@@ -62,7 +62,7 @@ def _derive_llm_findings(scan_results: list[AuditFinding]) -> list[AuditFinding]
                 {
                     "source": "LLMReview",
                     "severity": "HIGH",
-                    "title": "Sensitive Route May Miss Server-Side Authorization",
+                    "title": "敏感接口可能缺少服务端鉴权",
                     "description": "如果敏感接口只在前端隐藏而没有后端鉴权，低权限用户可能直接访问管理能力。",
                     "file_path": file_path,
                     "line_number": line_number,

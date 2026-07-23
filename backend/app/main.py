@@ -9,6 +9,7 @@ from backend.app.api.router import api_router
 from backend.app.core.config import settings
 from backend.app.core.database import init_db
 from backend.app.core.redis_client import close_redis, get_redis
+from backend.app.services.audit_service import recover_incomplete_audits
 
 
 @asynccontextmanager
@@ -20,6 +21,7 @@ async def lifespan(_: FastAPI):
         await redis.ping()
     except Exception:
         pass
+    recover_incomplete_audits()
     yield
     await close_redis()
 

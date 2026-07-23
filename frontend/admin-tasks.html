@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#03070b" />
+    <title>AuditPilot · 任务管理</title>
+    <link rel="stylesheet" href="./assets/styles.css?v=admin-pages-20260723" />
+  </head>
+  <body class="admin-page">
+    <a class="skip-link" href="#adminApp">跳到主要内容</a>
+    <div class="admin-shell">
+      <header class="admin-header">
+        <a class="brand brand-link" href="./index.html" aria-label="返回 AuditPilot 工作台"><div class="brand-mark" aria-hidden="true">&gt;_</div><div><strong>AuditPilot</strong><p>Administration</p></div></a>
+        <div class="admin-header-title">
+          <span class="eyebrow">// ADMINISTRATION</span><h1>任务管理<span class="terminal-cursor" aria-hidden="true"></span></h1>
+          <nav class="admin-nav" aria-label="管理页面"><a href="./admin.html">用户</a><a class="active" href="./admin-tasks.html">任务</a><a href="./admin-logs.html">操作日志</a></nav>
+        </div>
+        <div class="admin-header-actions"><span id="adminIdentity" class="chip">-</span><a class="link-button ghost" href="./index.html">返回工作台</a><button id="adminLogoutBtn" class="ghost" type="button">退出登录</button></div>
+      </header>
+
+      <main id="adminApp" class="admin-layout" hidden>
+        <section class="panel admin-users-panel">
+          <div class="panel-header"><div><span class="section-label">Audit jobs</span><h2>选择用户</h2></div><button id="refreshTasksBtn" class="ghost compact" type="button">刷新任务</button></div>
+          <div id="adminMessage" class="auth-message" role="status" hidden></div>
+          <label class="field admin-user-picker"><span>查看该用户的审计任务</span><select id="taskUserSelect" aria-label="选择用户"></select></label>
+        </section>
+        <section class="panel">
+          <div class="panel-header"><div><span class="section-label">Audit jobs</span><h2>用户任务</h2></div><span id="selectedUserLabel" class="chip">未选择用户</span></div>
+          <div id="tasksTable" class="table-wrap empty"><strong>请选择一个用户</strong><span>所选用户的审计任务会显示在这里。</span></div>
+        </section>
+        <section class="panel admin-detail-panel">
+          <div class="panel-header"><div><span class="section-label">Task detail</span><h2>审计结果</h2></div><span class="chip">Admin view</span></div>
+          <div id="adminTaskDetail" class="empty"><strong>请选择一个任务</strong><span>任务详情和漏洞发现会显示在这里。</span></div>
+        </section>
+      </main>
+
+      <section id="adminGate" class="auth-screen"><div class="auth-card compact-card"><div class="brand auth-brand"><div class="brand-mark" aria-hidden="true">&gt;_</div><div><strong>需要管理员权限</strong><p id="adminGateMessage">正在验证登录状态…</p></div></div><a class="link-button primary full-width" href="./index.html">前往登录</a></div></section>
+    </div>
+    <script src="./assets/runtime-config.js?v=admin-pages-20260723"></script>
+    <script type="module" src="./assets/admin-tasks.js?v=admin-pages-20260723-finding-zh"></script>
+  </body>
+</html>

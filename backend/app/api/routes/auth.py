@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -11,7 +12,10 @@ from backend.app.schemas.auth import (
     HumanCheckChallengeResponse,
     HumanCheckVerifyRequest,
     HumanCheckVerifyResponse,
+    AuthSessionResponse,
     LoginRequest,
+    LLMUsageAnalyticsResponse,
+    LLMUsageResponse,
     RegisterRequest,
     UserLLMConfigResponse,
     UserLLMConfigUpdateRequest,
@@ -19,11 +23,15 @@ from backend.app.schemas.auth import (
     UserLLMModelDiscoverResponse,
     UserPublic,
 )
+from backend.app.models import AuthSession
 from backend.app.services.auth_service import (
     authenticate_user,
     create_access_token,
     create_user,
     get_current_user,
+    extract_bearer_token,
+    revoke_session,
+    token_session_id,
     username_or_email_exists,
 )
 from backend.app.services.human_check import (
@@ -36,6 +44,7 @@ from backend.app.services.user_llm_config import (
     serialize_user_llm_config,
     update_user_llm_config,
 )
+from backend.app.services.llm_usage import usage_analytics, usage_summary
 
 
 router = APIRouter(prefix="/auth")
@@ -58,7 +67,11 @@ def verify_human_check(payload: HumanCheckVerifyRequest) -> HumanCheckVerifyResp
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def register(
+    payload: RegisterRequest,
+    request: Request = None,
+    db: Session = Depends(get_db),
+) -> AuthResponse:
     consume_human_check_proof(payload.human_check_proof)
     if username_or_email_exists(db, payload.username, payload.email):
         raise HTTPException(status_code=409, detail="Username or email already exists")
@@ -69,16 +82,32 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> AuthRes
         db.rollback()
         raise HTTPException(status_code=409, detail="Username or email already exists") from exc
 
-    return AuthResponse(access_token=create_access_token(user), user=UserPublic.model_validate(user))
+    token = create_access_token(
+        user,
+        db,
+        user_agent=request.headers.get("user-agent") if request else None,
+        ip_address=request.client.host if request and request.client else None,
+    )
+    return AuthResponse(access_token=token, user=UserPublic.model_validate(user))
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(
+    payload: LoginRequest,
+    request: Request = None,
+    db: Session = Depends(get_db),
+) -> AuthResponse:
     user = authenticate_user(db, payload.username_or_email, payload.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid username/email or password")
 
-    return AuthResponse(access_token=create_access_token(user), user=UserPublic.model_validate(user))
+    token = create_access_token(
+        user,
+        db,
+        user_agent=request.headers.get("user-agent") if request else None,
+        ip_address=request.client.host if request and request.client else None,
+    )
+    return AuthResponse(access_token=token, user=UserPublic.model_validate(user))
 
 
 @router.get("/me", response_model=UserPublic)
@@ -86,11 +115,65 @@ def me(current_user: User = Depends(get_current_user)) -> UserPublic:
     return UserPublic.model_validate(current_user)
 
 
+@router.get("/sessions", response_model=list[AuthSessionResponse])
+def list_sessions(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[AuthSessionResponse]:
+    current_session_id = token_session_id(extract_bearer_token(authorization))
+    sessions = db.execute(
+        select(AuthSession)
+        .where(AuthSession.user_id == current_user.id, AuthSession.revoked_at.is_(None))
+        .order_by(AuthSession.last_seen_at.desc())
+    ).scalars().all()
+    return [
+        AuthSessionResponse(
+            id=item.id,
+            user_agent=item.user_agent,
+            ip_address=item.ip_address,
+            created_at=item.created_at,
+            last_seen_at=item.last_seen_at,
+            expires_at=item.expires_at,
+            current=item.id == current_session_id,
+        )
+        for item in sessions
+    ]
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    if not revoke_session(db, session_id, current_user.id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Response(status_code=204)
+
+
+@router.post("/logout", status_code=204)
+def logout(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    session_id = token_session_id(extract_bearer_token(authorization))
+    if session_id:
+        revoke_session(db, session_id, current_user.id)
+    return Response(status_code=204)
+
+
 @router.get("/llm-config", response_model=UserLLMConfigResponse)
 def get_llm_config(
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> UserLLMConfigResponse:
-    return UserLLMConfigResponse.model_validate(serialize_user_llm_config(current_user.llm_config))
+    payload = serialize_user_llm_config(current_user.llm_config)
+    usage = usage_summary(db, current_user.id)
+    payload["monthly_token_limit"] = usage["monthly_token_limit"]
+    payload["monthly_tokens_used"] = usage["total_tokens"]
+    return UserLLMConfigResponse.model_validate(payload)
 
 
 @router.put("/llm-config", response_model=UserLLMConfigResponse)
@@ -108,7 +191,28 @@ def save_llm_config(
         api_key=payload.api_key,
         clear_api_key=payload.clear_api_key,
     )
-    return UserLLMConfigResponse.model_validate(serialize_user_llm_config(config))
+    response = serialize_user_llm_config(config)
+    usage = usage_summary(db, current_user.id)
+    response["monthly_token_limit"] = usage["monthly_token_limit"]
+    response["monthly_tokens_used"] = usage["total_tokens"]
+    return UserLLMConfigResponse.model_validate(response)
+
+
+@router.get("/llm-usage", response_model=LLMUsageResponse)
+def get_llm_usage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> LLMUsageResponse:
+    return LLMUsageResponse.model_validate(usage_summary(db, current_user.id))
+
+
+@router.get("/llm-usage/analytics", response_model=LLMUsageAnalyticsResponse)
+def get_llm_usage_analytics(
+    period: str = Query(default="all", pattern="^(all|30d|7d)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> LLMUsageAnalyticsResponse:
+    return LLMUsageAnalyticsResponse.model_validate(usage_analytics(db, current_user.id, period))
 
 
 @router.post("/llm-models/discover", response_model=UserLLMModelDiscoverResponse)

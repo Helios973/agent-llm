@@ -16,6 +16,14 @@ AuditPilot is a local code security audit prototype built with FastAPI, a static
 - Per-user OpenAI, DeepSeek, and OpenAI-compatible API settings with encrypted API-key storage
 - Automatic model discovery from each user's configured OpenAI-compatible `/models` endpoint
 - Admin stop control for queued or running ordinary-user audits
+- Independent task-center tab with filtering, renaming, retry, single/bulk deletion, history restore, and baseline selection
+- Restart recovery for persisted queued/running audits
+- Provider adapters for OpenAI, DeepSeek, OpenAI-compatible, Azure OpenAI, and Ollama
+- Incremental file scanning, finding comparison, and source-to-sink call-chain candidates
+- Per-user monthly token quotas, usage accounting, login sessions, and administrator operation logs
+- LLM usage analytics with period filters, streaks, activity heatmap, and per-model ranking
+- Upload/file-count/archive-expansion/storage quota controls
+- Alembic database migrations
 
 ## Project Layout
 
@@ -75,6 +83,30 @@ HUMAN_CHECK_MIN_COMPLETION_MS=1200
 JAVA_AUDIT_SKILLS_ENABLED=true
 JAVA_AUDIT_SKILLS_ROOT=
 ```
+
+## Database Migration
+
+Back up the database, then apply the tracked schema revision:
+
+```powershell
+python -m alembic upgrade head
+python -m alembic current
+```
+
+The first revision adopts existing tables, adds missing platform columns, and creates the session, usage, and administrator log tables. Runtime startup keeps a compatibility column check for older local databases.
+
+## New API Surfaces
+
+- `GET /api/v1/audit/tasks` — paginated personal task history
+- `PATCH /api/v1/audit/{task_id}` — rename a task
+- `POST /api/v1/audit/{task_id}/retry` — retry terminal tasks
+- `DELETE /api/v1/audit/{task_id}` — remove task artifacts and data
+- `GET /api/v1/audit/{task_id}/compare/{baseline_task_id}` — compare findings
+- `GET /api/v1/auth/llm-usage` — current-month token usage
+- `GET/DELETE /api/v1/auth/sessions` — list or revoke sessions
+- `GET /api/v1/admin/audit-logs` — administrator action history
+- `PATCH /api/v1/admin/users/{user_id}/llm-quota` — update a monthly token quota
+- `POST /api/v1/admin/users/{user_id}/sessions/revoke` — revoke a user’s sessions
 
 Set `AUTH_SECRET_KEY` explicitly if you want stable tokens across restarts. When it is empty, the backend falls back to a per-process secret so placeholder values cannot be abused.
 For local use, the first API-key save automatically creates `backend/data/.credential_encryption_key` and reuses it across restarts. An explicit `CREDENTIAL_ENCRYPTION_KEY` takes precedence; existing deployments with only `AUTH_SECRET_KEY` keep using that value. The raw per-user key is never returned by the API or shown again in the UI.

@@ -1,14 +1,26 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+import json
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
-from backend.app.models import AuditTask, User
-from backend.app.schemas.auth import AdminTaskSummary, AdminUserSummary, AdminUserUpdateRequest
+from backend.app.models import AdminAuditLog, AuditTask, AuthSession, User
+from backend.app.schemas.auth import (
+    AdminAuditLogResponse,
+    AdminAuditLogClearRequest,
+    AdminQuotaUpdateRequest,
+    AdminTaskSummary,
+    AdminUserSummary,
+    AdminUserUpdateRequest,
+    LLMUsageResponse,
+)
 from backend.app.services.audit_service import stop_audit
-from backend.app.services.auth_service import require_admin
+from backend.app.services.auth_service import record_admin_action, require_admin
+from backend.app.services.llm_usage import usage_summary
 
 
 router = APIRouter(prefix="/admin")
@@ -51,6 +63,7 @@ def update_user(
     if user.id == current_admin.id and payload.role == "user":
         raise HTTPException(status_code=400, detail="You cannot demote your own administrator account")
 
+    before = {"role": user.role, "is_active": user.is_active}
     if payload.role is not None:
         user.role = payload.role
     if payload.is_active is not None:
@@ -58,6 +71,14 @@ def update_user(
 
     db.commit()
     db.refresh(user)
+    record_admin_action(
+        db,
+        admin_user_id=current_admin.id,
+        action="user.update",
+        target_type="user",
+        target_id=user.id,
+        details={"before": before, "after": {"role": user.role, "is_active": user.is_active}},
+    )
     task_count = db.execute(select(func.count(AuditTask.id)).where(AuditTask.user_id == user.id)).scalar_one()
     return AdminUserSummary.model_validate(user).model_copy(update={"task_count": int(task_count)})
 
@@ -99,7 +120,7 @@ def list_user_tasks(
 async def stop_user_task(
     task_id: str,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_admin: User = Depends(require_admin),
 ) -> AdminTaskSummary:
     task = db.get(AuditTask, task_id)
     if task is None:
@@ -114,6 +135,14 @@ async def stop_user_task(
     stopped = await stop_audit(task_id)
     if stopped is None:
         raise HTTPException(status_code=409, detail="Task is no longer running")
+    record_admin_action(
+        db,
+        admin_user_id=current_admin.id,
+        action="task.stop",
+        target_type="audit_task",
+        target_id=stopped.id,
+        details={"owner_id": stopped.user_id, "status": stopped.status},
+    )
     return AdminTaskSummary(
         id=stopped.id,
         user_id=stopped.user_id,
@@ -127,3 +156,102 @@ async def stop_user_task(
         finished_at=stopped.finished_at,
         finding_count=0,
     )
+
+
+@router.patch("/users/{user_id}/llm-quota", response_model=LLMUsageResponse)
+def update_user_llm_quota(
+    user_id: str,
+    payload: AdminQuotaUpdateRequest,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin),
+) -> LLMUsageResponse:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    previous = user.monthly_token_limit
+    user.monthly_token_limit = payload.monthly_token_limit
+    db.commit()
+    record_admin_action(
+        db,
+        admin_user_id=current_admin.id,
+        action="user.llm_quota.update",
+        target_type="user",
+        target_id=user.id,
+        details={"before": previous, "after": payload.monthly_token_limit},
+    )
+    return LLMUsageResponse.model_validate(usage_summary(db, user.id))
+
+
+@router.post("/users/{user_id}/sessions/revoke", status_code=204)
+def revoke_user_sessions(
+    user_id: str,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_admin),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    sessions = db.execute(
+        select(AuthSession).where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+    ).scalars().all()
+    now = datetime.now(timezone.utc)
+    for session in sessions:
+        session.revoked_at = now
+    db.commit()
+    record_admin_action(
+        db,
+        admin_user_id=current_admin.id,
+        action="user.sessions.revoke",
+        target_type="user",
+        target_id=user.id,
+        details={"revoked_count": len(sessions)},
+    )
+    from fastapi import Response
+
+    return Response(status_code=204)
+
+
+@router.get("/audit-logs", response_model=list[AdminAuditLogResponse])
+def list_admin_audit_logs(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> list[AdminAuditLogResponse]:
+    rows = db.execute(
+        select(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(limit)
+    ).scalars().all()
+    result: list[AdminAuditLogResponse] = []
+    for row in rows:
+        try:
+            details = json.loads(row.details_json or "{}")
+        except json.JSONDecodeError:
+            details = {"raw": row.details_json}
+        result.append(
+            AdminAuditLogResponse(
+                id=row.id,
+                admin_user_id=row.admin_user_id,
+                action=row.action,
+                target_type=row.target_type,
+                target_id=row.target_id,
+                details=details if isinstance(details, dict) else {"value": details},
+                created_at=row.created_at,
+            )
+        )
+    return result
+
+
+@router.delete("/audit-logs")
+def clear_admin_audit_logs(
+    payload: AdminAuditLogClearRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, int]:
+    if payload.clear_all:
+        statement = delete(AdminAuditLog)
+    else:
+        log_ids = list(dict.fromkeys(payload.ids))
+        statement = delete(AdminAuditLog).where(AdminAuditLog.id.in_(log_ids))
+
+    result = db.execute(statement)
+    db.commit()
+    return {"deleted_count": int(result.rowcount or 0)}

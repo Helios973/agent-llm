@@ -16,11 +16,57 @@ class UploadResponse(BaseModel):
 
 class StartAuditRequest(BaseModel):
     task_id: str
+    baseline_task_id: str | None = None
 
 
 class StartAuditResponse(BaseModel):
     task_id: str
     status: str
+
+
+class AuditTaskSummary(BaseModel):
+    id: str
+    task_name: str
+    status: str
+    upload_name: str | None = None
+    language: str | None = None
+    framework: str | None = None
+    baseline_task_id: str | None = None
+    retry_count: int = 0
+    finding_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class AuditTaskListResponse(BaseModel):
+    items: list[AuditTaskSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class AuditTaskUpdateRequest(BaseModel):
+    task_name: str = Field(min_length=1, max_length=255)
+
+
+class AuditTaskBulkDeleteRequest(BaseModel):
+    task_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class AuditTaskBulkDeleteResponse(BaseModel):
+    deleted_ids: list[str] = Field(default_factory=list)
+    skipped_ids: list[str] = Field(default_factory=list)
+
+
+class AuditComparisonResponse(BaseModel):
+    task_id: str
+    baseline_task_id: str
+    changed_files: list[str] = Field(default_factory=list)
+    new_findings: list[FindingResponse] = Field(default_factory=list)
+    unchanged_findings: list[FindingResponse] = Field(default_factory=list)
+    resolved_findings: list[FindingResponse] = Field(default_factory=list)
 
 
 class FindingResponse(BaseModel):
@@ -58,6 +104,11 @@ class AuditTaskResponse(BaseModel):
     upload_name: str | None = None
     project_path: str | None = None
     report_dir: str | None = None
+    baseline_task_id: str | None = None
+    changed_files: list[str] = Field(default_factory=list)
+    source_digest: str | None = None
+    retry_count: int = 0
+    error_message: str | None = None
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None

@@ -19,6 +19,8 @@ from backend.app.services.code_security_skill import (
 )
 from backend.app.services.java_audit_skill import build_java_audit_prompt_addendum
 from backend.app.services.user_llm_config import LLMConnection, get_user_llm_connection
+from backend.app.services.llm_providers import get_provider_adapter
+from backend.app.services.llm_usage import ensure_quota, record_usage
 
 
 SOURCE_SUFFIXES = {
@@ -763,7 +765,7 @@ def _build_user_prompt(
         "reproduction_steps,evidence,related_files,related_cves,ctf_scenarios,references,confidence_score,category,attack_path.\n"
         "Each filter_summary item must contain: title,file_path,decision,confidence_score,reason,hard_exclusion,precedent_hit,concrete_attack_path.\n"
         "If a finding spans multiple files, set file_path to the most security-critical file/line and list the rest in related_files.\n"
-        "Write description, impact, recommendation, reproduction_steps, evidence, and attack_path in Chinese.\n"
+        "Write title, description, impact, recommendation, reproduction_steps, evidence, and attack_path in Chinese.\n"
         "Return at most "
         f"{settings.llm_max_findings} findings with strong exploitability value.\n\n"
         f"Task Name: {task_name}\n"
@@ -795,23 +797,12 @@ def _build_request_payload(
     user_identifier: str,
     connection: LLMConnection,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "model": connection.model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "response_format": {"type": "json_object"},
-        "stream": False,
-        "temperature": 0.2,
-        "max_tokens": settings.llm_max_output_tokens,
-        "user_id": user_identifier,
-    }
-    # DeepSeek extensions are deliberately not sent to OpenAI-compatible APIs.
-    if connection.provider == "deepseek":
-        payload["reasoning_effort"] = settings.deepseek_reasoning_effort
-        payload["thinking"] = {"type": "enabled" if settings.deepseek_thinking_enabled else "disabled"}
-    return payload
+    return get_provider_adapter(connection.provider).build_chat_payload(
+        model=connection.model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        user_identifier=user_identifier,
+    )
 
 
 def _extract_response_text(payload: dict[str, Any]) -> str:
@@ -1001,21 +992,45 @@ async def review_project_with_llm(
     )
     payload = _build_request_payload(system_prompt, user_prompt, user_id or task_id, connection)
 
+    projected_input_tokens = max((len(system_prompt) + len(user_prompt)) // 4, 1)
+    db = SessionLocal()
+    try:
+        ensure_quota(db, user_id, projected_input_tokens + settings.llm_max_output_tokens)
+    finally:
+        db.close()
+
     timeout = httpx.Timeout(settings.llm_timeout_seconds)
-    base_url = connection.base_url.rstrip("/")
+    adapter = get_provider_adapter(connection.provider)
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(
-            f"{base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {connection.api_key}",
-                "Content-Type": "application/json",
-            },
+            adapter.chat_url(connection.base_url),
+            headers=adapter.auth_headers(connection.api_key),
             json=payload,
         )
         response.raise_for_status()
         body = response.json()
 
     raw_text = _extract_response_text(body)
+    usage = body.get("usage", {}) if isinstance(body, dict) else {}
+    input_tokens = _coerce_int(usage.get("prompt_tokens", usage.get("input_tokens")), projected_input_tokens)
+    output_tokens = _coerce_int(
+        usage.get("completion_tokens", usage.get("output_tokens")),
+        max(len(raw_text) // 4, 1) if raw_text else 0,
+    )
+    db = SessionLocal()
+    try:
+        record_usage(
+            db,
+            user_id=user_id,
+            task_id=task_id,
+            provider=connection.provider,
+            model=connection.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    finally:
+        db.close()
+
     if not raw_text:
         return [], f"{connection.provider} returned an empty review payload"
 

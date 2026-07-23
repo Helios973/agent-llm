@@ -136,7 +136,7 @@ def managed_python(explicit: str = "") -> Path:
 
 def dependencies_ready(python: Path) -> bool:
     result = subprocess.run(
-        [str(python), "-c", "import cryptography, fastapi, httpx, uvicorn"],
+        [str(python), "-c", "import alembic, cryptography, fastapi, httpx, uvicorn"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,

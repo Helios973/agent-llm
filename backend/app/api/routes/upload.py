@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -9,7 +10,8 @@ from backend.app.core.database import get_db
 from backend.app.models import AuditTask, User
 from backend.app.schemas.audit import UploadResponse
 from backend.app.services.auth_service import get_current_user
-from backend.app.services.files import SavedUploadBundle, build_demo_upload, save_uploads
+from backend.app.core.config import settings
+from backend.app.services.files import SavedUploadBundle, build_demo_upload, path_size, save_uploads, user_storage_usage
 
 
 router = APIRouter()
@@ -69,8 +71,13 @@ async def upload_source_code(
 
     task_id = str(uuid4())
 
+    usage = user_storage_usage(current_user.tasks)
+    remaining_quota = settings.user_storage_quota_bytes - usage
+    if remaining_quota <= 0:
+        raise HTTPException(status_code=413, detail="User storage quota is exhausted")
+
     try:
-        upload_bundle = await save_uploads(task_id, uploads)
+        upload_bundle = await save_uploads(task_id, uploads, max_total_bytes=remaining_quota)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -95,7 +102,13 @@ async def upload_demo_project(
     current_user: User = Depends(get_current_user),
 ) -> UploadResponse:
     task_id = str(uuid4())
+    remaining_quota = settings.user_storage_quota_bytes - user_storage_usage(current_user.tasks)
+    if remaining_quota <= 0:
+        raise HTTPException(status_code=413, detail="User storage quota is exhausted")
     upload_path = build_demo_upload(task_id)
+    if path_size(upload_path) > remaining_quota:
+        shutil.rmtree(upload_path.parent, ignore_errors=True)
+        raise HTTPException(status_code=413, detail="Demo upload exceeds the remaining storage quota")
     upload_bundle = SavedUploadBundle(path=upload_path, names=[upload_path.name])
 
     return _create_task_record(

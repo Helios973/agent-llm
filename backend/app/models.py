@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -23,10 +24,13 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    monthly_token_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1_000_000)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     tasks: Mapped[list["AuditTask"]] = relationship(back_populates="user")
     llm_config: Mapped["UserLLMConfig | None"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
+    sessions: Mapped[list["AuthSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    llm_usage: Mapped[list["LLMUsage"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class UserLLMConfig(Base):
@@ -37,10 +41,54 @@ class UserLLMConfig(Base):
     base_url: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str] = mapped_column(String(255), nullable=False)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    monthly_token_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1_000_000)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="llm_config")
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class LLMUsage(Base):
+    __tablename__ = "llm_usage"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+
+    user: Mapped[User] = relationship(back_populates="llm_usage")
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    admin_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(191))
+    details_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
 
 
 class AuditTask(Base):
@@ -56,6 +104,12 @@ class AuditTask(Base):
     upload_path: Mapped[str | None] = mapped_column(Text)
     project_path: Mapped[str | None] = mapped_column(Text)
     report_dir: Mapped[str | None] = mapped_column(Text)
+    baseline_task_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    changed_files_json: Mapped[str | None] = mapped_column(Text().with_variant(LONGTEXT(), "mysql"))
+    source_digest: Mapped[str | None] = mapped_column(String(64))
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
